@@ -169,7 +169,11 @@ impl cosmic::Application for AppModel {
             details_content(self.interface.clone(), self.local_ip.clone(), backend::vpn_active()),
         ));
 
-        self.core.applet.popup_container(widget::column::with_children(col)).into()
+        let content = widget::column::with_children(col);
+        let content = widget::container(content)
+            .style(popup_inner_style)
+            .padding(8);
+        self.core.applet.popup_container(content).into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -267,12 +271,12 @@ impl cosmic::Application for AppModel {
                         self.tx_speed = tx;
 
                         let records = storage::update_today(
-                            self.records.clone(),
+                            std::mem::take(&mut self.records),
                             rx_diff,
                             tx_diff,
                         );
-                        self.records = records.clone();
-                        let agg = storage::aggregate(&records);
+                        self.records = records;
+                        let agg = storage::aggregate(&self.records);
                         self.today_rx = agg.today_rx;
                         self.today_tx = agg.today_tx;
                         self.this_month_rx = agg.this_month_rx;
@@ -280,6 +284,10 @@ impl cosmic::Application for AppModel {
                         self.last_month_rx = agg.last_month_rx;
                         self.last_month_tx = agg.last_month_tx;
 
+                        self.prev_sample = Some((curr, now));
+                        self.last_tick = now;
+
+                        let records = self.records.clone();
                         return Task::perform(
                             async move { storage::save_stats(&records).await },
                             |_| Action::None,
@@ -325,36 +333,30 @@ impl AppModel {
 
         match self.config.panel_preset.as_str() {
             "standard" => format!("↓{} ↑{}", rx, tx),
-            "detailed" => format!("↓{} ↑{}", Self::fmt_speed_full(self.rx_speed), Self::fmt_speed_full(self.tx_speed)),
-            _ => format!("{}↓ {}↑", rx, tx),
+            "detailed" => format!("↓{}  ↑{}", rx, tx),
+            _ => format!("{} ↓ | {} ↑", rx, tx),
         }
     }
 
-    fn fmt_speed_full(value_bps: f64) -> String {
-        let units = if value_bps >= 1_000_000_000.0 {
-            ("G", 1_000_000_000.0)
-        } else if value_bps >= 1_000_000.0 {
-            ("M", 1_000_000.0)
-        } else if value_bps >= 1_000.0 {
-            ("k", 1_000.0)
-        } else {
-            ("", 1.0)
-        };
-        let scaled = value_bps / units.1;
-        format!("{:.1}{}bps", scaled, units.0)
-    }
-
     fn format_compact_speed(value_bps: f64) -> String {
-        if value_bps >= 1_000_000_000.0 {
-            format!("{:.0}", value_bps / 1_000_000_000.0)
+        let (scaled, prefix) = if value_bps >= 1_000_000_000.0 {
+            (value_bps / 1_000_000_000.0, "G")
         } else if value_bps >= 1_000_000.0 {
-            format!("{:.0}", value_bps / 1_000_000.0)
+            (value_bps / 1_000_000.0, "M")
         } else if value_bps >= 1_000.0 {
-            format!("{:.0}", value_bps / 1_000.0)
-        } else if value_bps >= 1.0 {
-            format!("{:.0}", value_bps)
+            (value_bps / 1_000.0, "K")
         } else {
-            "0".to_string()
+            (value_bps, "")
+        };
+
+        if scaled >= 10.0 {
+            format!("{:.0} {}bps", scaled, prefix)
+        } else if scaled >= 1.0 {
+            format!("{:.1} {}bps", scaled, prefix)
+        } else if scaled > 0.0 {
+            format!("{:.2} {}bps", scaled, prefix)
+        } else {
+            "0 bps".to_string()
         }
     }
 
@@ -393,7 +395,7 @@ fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
         } else if bps >= 1_000_000.0 {
             (bps / 1_000_000.0, "M")
         } else if bps >= 1_000.0 {
-            (bps / 1_000.0, "k")
+            (bps / 1_000.0, "K")
         } else {
             (bps, "")
         };
@@ -489,6 +491,28 @@ fn details_content(iface: String, ip: String, vpn: bool) -> Element<'static, Mes
     .spacing(4)
     .padding([0, 0, 8, 0])
     .into()
+}
+
+fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let bg = if theme.transparent {
+        cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
+            cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
+                .add_stop(0.0, cosmic::iced::Color::from_rgba8(0x27, 0x27, 0x27, 0.55))
+                .add_stop(1.0, cosmic::iced::Color::from_rgba8(0x10, 0x10, 0x10, 0.75)),
+        ))
+    } else {
+        cosmic::iced::Background::Color(cosmic::iced::Color::from_rgb8(0x27, 0x27, 0x27))
+    };
+    cosmic::widget::container::Style {
+        background: Some(bg),
+        text_color: Some(cosmic::iced::Color::from_rgb8(0xF3, 0xF1, 0xEC)),
+        border: cosmic::iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: cosmic::iced::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.08),
+        },
+        ..Default::default()
+    }
 }
 
 fn volume_str(bytes: u64) -> String {

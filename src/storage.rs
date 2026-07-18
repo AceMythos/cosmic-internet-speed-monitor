@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
-const APP_ID: &str = "com.github.igris.InternetSpeedMonitor";
+const APP_ID: &str = "com.github.AceMythos.InternetSpeedMonitor";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyRecord {
@@ -34,7 +34,7 @@ fn data_file_bak() -> PathBuf {
 }
 
 fn today_key() -> String {
-    let now = Utc::now();
+    let now = Local::now();
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
 }
 
@@ -134,7 +134,7 @@ pub fn aggregate(records: &[DailyRecord]) -> StatsAgg {
     let mut last_month_tx = 0u64;
 
     let today = today_key();
-    let now = Utc::now();
+    let now = Local::now();
     let this_month = (now.year(), now.month());
 
     let last_month = if now.month() == 1 {

@@ -7,7 +7,6 @@ pub struct Config {
     pub panel_preset: String,
     pub network_interface: String,
     pub speed_units: String,
-    pub data_units: String,
 }
 
 impl Default for Config {
@@ -17,7 +16,6 @@ impl Default for Config {
             panel_preset: "compact".to_string(),
             network_interface: "auto".to_string(),
             speed_units: "auto".to_string(),
-            data_units: "bytes".to_string(),
         }
     }
 }
