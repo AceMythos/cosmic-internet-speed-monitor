@@ -44,8 +44,7 @@ pub struct AppModel {
     monthly_expanded: bool,
     details_expanded: bool,
     settings_expanded: bool,
-
-    tooltip_popup: Option<Id>,
+    settings_iface_opts: Vec<String>,
 
     last_tick: Instant,
 }
@@ -74,7 +73,7 @@ impl Default for AppModel {
             monthly_expanded: false,
             details_expanded: false,
             settings_expanded: false,
-            tooltip_popup: None,
+            settings_iface_opts: Vec::new(),
             last_tick: Instant::now(),
         }
     }
@@ -94,9 +93,6 @@ pub enum Message {
     SetSpeedUnits(String),
     SetNetworkInterface(String),
     ToggleSettings,
-    ButtonHovered,
-    ButtonLeft,
-    TooltipPopupClosed(Id),
 }
 
 impl cosmic::Application for AppModel {
@@ -136,11 +132,7 @@ impl cosmic::Application for AppModel {
     }
 
     fn on_close_requested(&self, id: Id) -> Option<Message> {
-        if self.tooltip_popup.as_ref() == Some(&id) {
-            Some(Message::TooltipPopupClosed(id))
-        } else {
-            Some(Message::PopupClosed(id))
-        }
+        Some(Message::PopupClosed(id))
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
@@ -151,19 +143,10 @@ impl cosmic::Application for AppModel {
             .on_press_down(Message::TogglePopup)
             .padding([4, 8]);
 
-        let btn = self.core.applet.autosize_window(btn);
-
-        widget::mouse_area(btn)
-            .on_enter(Message::ButtonHovered)
-            .on_exit(Message::ButtonLeft)
-            .into()
+        self.core.applet.autosize_window(btn).into()
     }
 
-    fn view_window(&self, id: Id) -> Element<'_, Self::Message> {
-        if self.tooltip_popup.as_ref() == Some(&id) {
-            return tooltip_popup_content(self.today_rx, self.today_tx, self.this_month_rx, self.this_month_tx);
-        }
-
+    fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
         let mut col: Vec<Element<Message>> = Vec::new();
 
         if self.no_interface {
@@ -199,7 +182,7 @@ impl cosmic::Application for AppModel {
             "Settings",
             self.settings_expanded,
             Message::ToggleSettings,
-            settings_content(&self.config, &self.available_interfaces),
+            self.settings_view(),
         ));
 
         let content = widget::column::with_children(col);
@@ -281,6 +264,10 @@ impl cosmic::Application for AppModel {
 
                 self.available_interfaces = curr.keys().cloned().collect();
                 self.available_interfaces.sort();
+
+                let mut opts = vec!["auto".to_string()];
+                opts.extend(self.available_interfaces.clone());
+                self.settings_iface_opts = opts;
 
                 if !curr.contains_key(&interface) {
                     self.no_interface = true;
@@ -374,36 +361,6 @@ impl cosmic::Application for AppModel {
                 self.config.network_interface = val;
                 self.persist_config();
             }
-            Message::ButtonHovered => {
-                if self.tooltip_popup.is_none() {
-                    let new_id = Id::unique();
-                    self.tooltip_popup = Some(new_id);
-                    let mut popup_settings = self.core.applet.get_popup_settings(
-                        self.core.main_window_id().unwrap(),
-                        new_id,
-                        None,
-                        None,
-                        None,
-                    );
-                    popup_settings.positioner.size_limits = Limits::NONE
-                        .max_width(300.0)
-                        .min_width(180.0)
-                        .min_height(60.0)
-                        .max_height(200.0);
-                    popup_settings.grab = false;
-                    return get_popup(popup_settings);
-                }
-            }
-            Message::ButtonLeft => {
-                if let Some(id) = self.tooltip_popup.take() {
-                    return destroy_popup(id);
-                }
-            }
-            Message::TooltipPopupClosed(id) => {
-                if self.tooltip_popup.as_ref() == Some(&id) {
-                    self.tooltip_popup = None;
-                }
-            }
         }
         Task::none()
     }
@@ -419,11 +376,7 @@ impl AppModel {
         let rx = Self::format_compact_speed(self.rx_speed, units);
         let tx = Self::format_compact_speed(self.tx_speed, units);
 
-        match self.config.panel_preset.as_str() {
-            "standard" => format!("↓{} ↑{}", rx, tx),
-            "detailed" => format!("↓{}  ↑{}", rx, tx),
-            _ => format!("{} ↓ | {} ↑", rx, tx),
-        }
+        format!("↓{} | ↑{}", rx, tx)
     }
 
     fn format_compact_speed(value_bps: f64, units: &str) -> String {
@@ -443,7 +396,8 @@ impl AppModel {
         if scaled >= 10.0 {
             format!("{:.0} {}{}", scaled, prefix, suf)
         } else if scaled >= 1.0 {
-            format!("{:.1} {}{}", scaled, prefix, suf)
+            let s = format!("{:.1} {}{}", scaled, prefix, suf);
+            s.replace(".0 ", " ")
         } else if scaled > 0.0 {
             format!("{:.2} {}{}", scaled, prefix, suf)
         } else {
@@ -484,6 +438,43 @@ impl AppModel {
         } else {
             header.into()
         }
+    }
+
+    fn settings_view(&self) -> Element<'_, Message> {
+        let presets: &[&str] = &["compact", "standard", "detailed"];
+        let unit_opts: &[&str] = &["bps", "bytes"];
+
+        let interval = self.config.refresh_interval;
+
+        widget::column![
+            settings::item(
+                "Panel Preset",
+                pick_list(presets, Some(self.config.panel_preset.as_str()), |s| Message::SetPanelPreset(s.to_string())),
+            ),
+            settings::item(
+                "Speed Units",
+                pick_list(unit_opts, Some(self.config.speed_units.as_str()), |s| Message::SetSpeedUnits(s.to_string())),
+            ),
+            settings::item(
+                "Refresh Interval (ms)",
+                widget::row![
+                    widget::button::custom(text::body("-"))
+                        .on_press(Message::SetRefreshInterval(interval.saturating_sub(100).max(200))),
+                    text::body(format!("{} ms", interval)).width(Length::Fixed(70.0)),
+                    widget::button::custom(text::body("+"))
+                        .on_press(Message::SetRefreshInterval((interval + 100).min(5000))),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ),
+            settings::item(
+                "Interface",
+                pick_list(self.settings_iface_opts.as_slice(), Some(&self.config.network_interface), |s| Message::SetNetworkInterface(s)),
+            ),
+        ]
+        .spacing(4)
+        .padding([0, 0, 8, 0])
+        .into()
     }
 }
 
@@ -566,65 +557,6 @@ fn details_content(iface: String, ip: String, vpn: bool) -> Element<'static, Mes
             text::body(vpn_text),
         ]
         .padding([4, 12]),
-    ]
-    .spacing(4)
-    .padding([0, 0, 8, 0])
-    .into()
-}
-
-fn tooltip_popup_content(today_rx: u64, today_tx: u64, month_rx: u64, month_tx: u64) -> Element<'static, Message> {
-    let total = today_rx + today_tx;
-    widget::container(
-        widget::column![
-            text::body("Today").size(12),
-            text::title1(volume_str(total)),
-            text::body(format!("↓ {}  ↑ {}", volume_str(today_rx), volume_str(today_tx))).size(12),
-            widget::divider::horizontal::default(),
-            text::body("This Month").size(12),
-            text::body(format!("↓ {}  ↑ {}", volume_str(month_rx), volume_str(month_tx))).size(12),
-        ]
-        .spacing(2),
-    )
-    .padding(12)
-    .into()
-}
-
-fn settings_content(config: &Config, interfaces: &[String]) -> Element<'static, Message> {
-    let presets: &[&str] = &["compact", "standard", "detailed"];
-    let unit_opts: &[&str] = &["bps", "bytes"];
-
-    let panel_preset: &str = &*Box::leak(config.panel_preset.clone().into_boxed_str());
-    let speed_units: &str = &*Box::leak(config.speed_units.clone().into_boxed_str());
-    let network_interface: &str = &*Box::leak(config.network_interface.clone().into_boxed_str());
-
-    let mut iface_opts: Vec<&str> = vec!["auto"];
-    iface_opts.extend(interfaces.iter().map(|s| &*Box::leak(s.clone().into_boxed_str())));
-    let iface_slice: &[&str] = &*Box::leak(iface_opts.into_boxed_slice());
-
-    widget::column![
-        settings::item(
-            "Panel Preset",
-            pick_list(presets, Some(panel_preset), |s| Message::SetPanelPreset(s.to_string())),
-        ),
-        settings::item(
-            "Speed Units",
-            pick_list(unit_opts, Some(speed_units), |s| Message::SetSpeedUnits(s.to_string())),
-        ),
-        settings::item(
-            "Refresh Interval (ms)",
-            widget::row![
-                widget::slider(200.0..=5000.0f64, config.refresh_interval as f64, |v| Message::SetRefreshInterval(v as u64))
-                    .step(100.0)
-                    .width(Length::Fill),
-                text::body(format!("{}ms", config.refresh_interval)).width(Length::Fixed(50.0)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        ),
-        settings::item(
-            "Interface",
-            pick_list(iface_slice, Some(network_interface), |s| Message::SetNetworkInterface(s.to_string())),
-        ),
     ]
     .spacing(4)
     .padding([0, 0, 8, 0])
