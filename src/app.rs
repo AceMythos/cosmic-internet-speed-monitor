@@ -45,6 +45,8 @@ pub struct AppModel {
     details_expanded: bool,
     settings_expanded: bool,
 
+    tooltip_popup: Option<Id>,
+
     last_tick: Instant,
 }
 
@@ -72,6 +74,7 @@ impl Default for AppModel {
             monthly_expanded: false,
             details_expanded: false,
             settings_expanded: false,
+            tooltip_popup: None,
             last_tick: Instant::now(),
         }
     }
@@ -91,6 +94,9 @@ pub enum Message {
     SetSpeedUnits(String),
     SetNetworkInterface(String),
     ToggleSettings,
+    ButtonHovered,
+    ButtonLeft,
+    TooltipPopupClosed(Id),
 }
 
 impl cosmic::Application for AppModel {
@@ -110,7 +116,7 @@ impl cosmic::Application for AppModel {
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
         let config_ctx = cosmic_config::Config::new(Self::APP_ID, Config::VERSION).ok();
         let cfg = config_ctx.as_ref()
-            .and_then(|ctx| Config::get_entry(ctx).ok().map(|(c, _)| c))
+            .and_then(|ctx| Config::get_entry(ctx).ok())
             .unwrap_or_default();
 
         let app = Self {
@@ -130,7 +136,11 @@ impl cosmic::Application for AppModel {
     }
 
     fn on_close_requested(&self, id: Id) -> Option<Message> {
-        Some(Message::PopupClosed(id))
+        if self.tooltip_popup.as_ref() == Some(&id) {
+            Some(Message::TooltipPopupClosed(id))
+        } else {
+            Some(Message::PopupClosed(id))
+        }
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
@@ -141,10 +151,19 @@ impl cosmic::Application for AppModel {
             .on_press_down(Message::TogglePopup)
             .padding([4, 8]);
 
-        self.core.applet.autosize_window(btn).into()
+        let btn = self.core.applet.autosize_window(btn);
+
+        widget::mouse_area(btn)
+            .on_enter(Message::ButtonHovered)
+            .on_exit(Message::ButtonLeft)
+            .into()
     }
 
-    fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
+    fn view_window(&self, id: Id) -> Element<'_, Self::Message> {
+        if self.tooltip_popup.as_ref() == Some(&id) {
+            return tooltip_popup_content(self.today_rx, self.today_tx, self.this_month_rx, self.this_month_tx);
+        }
+
         let mut col: Vec<Element<Message>> = Vec::new();
 
         if self.no_interface {
@@ -174,6 +193,13 @@ impl cosmic::Application for AppModel {
             self.details_expanded,
             Message::ToggleDetails,
             details_content(self.interface.clone(), self.local_ip.clone(), backend::vpn_active()),
+        ));
+
+        col.push(self.expander(
+            "Settings",
+            self.settings_expanded,
+            Message::ToggleSettings,
+            settings_content(&self.config, &self.available_interfaces),
         ));
 
         let content = widget::column::with_children(col);
@@ -223,7 +249,7 @@ impl cosmic::Application for AppModel {
                     );
 
                     popup_settings.positioner.size_limits = Limits::NONE
-                        .max_width(372.0)
+                        .max_width(400.0)
                         .min_width(300.0)
                         .min_height(200.0)
                         .max_height(1080.0);
@@ -252,6 +278,9 @@ impl cosmic::Application for AppModel {
 
                 let interface = backend::filter_interfaces(&curr, &self.config.network_interface);
                 self.interface.clone_from(&interface);
+
+                self.available_interfaces = curr.keys().cloned().collect();
+                self.available_interfaces.sort();
 
                 if !curr.contains_key(&interface) {
                     self.no_interface = true;
@@ -326,6 +355,55 @@ impl cosmic::Application for AppModel {
             Message::ToggleDetails => {
                 self.details_expanded = !self.details_expanded;
             }
+            Message::ToggleSettings => {
+                self.settings_expanded = !self.settings_expanded;
+            }
+            Message::SetRefreshInterval(val) => {
+                self.config.refresh_interval = val;
+                self.persist_config();
+            }
+            Message::SetPanelPreset(val) => {
+                self.config.panel_preset = val;
+                self.persist_config();
+            }
+            Message::SetSpeedUnits(val) => {
+                self.config.speed_units = val;
+                self.persist_config();
+            }
+            Message::SetNetworkInterface(val) => {
+                self.config.network_interface = val;
+                self.persist_config();
+            }
+            Message::ButtonHovered => {
+                if self.tooltip_popup.is_none() {
+                    let new_id = Id::unique();
+                    self.tooltip_popup = Some(new_id);
+                    let mut popup_settings = self.core.applet.get_popup_settings(
+                        self.core.main_window_id().unwrap(),
+                        new_id,
+                        None,
+                        None,
+                        None,
+                    );
+                    popup_settings.positioner.size_limits = Limits::NONE
+                        .max_width(300.0)
+                        .min_width(180.0)
+                        .min_height(60.0)
+                        .max_height(200.0);
+                    popup_settings.grab = false;
+                    return get_popup(popup_settings);
+                }
+            }
+            Message::ButtonLeft => {
+                if let Some(id) = self.tooltip_popup.take() {
+                    return destroy_popup(id);
+                }
+            }
+            Message::TooltipPopupClosed(id) => {
+                if self.tooltip_popup.as_ref() == Some(&id) {
+                    self.tooltip_popup = None;
+                }
+            }
         }
         Task::none()
     }
@@ -373,6 +451,12 @@ impl AppModel {
         }
     }
 
+    fn persist_config(&self) {
+        if let Some(ctx) = &self.config_ctx {
+            let _ = self.config.write_entry(ctx);
+        }
+    }
+
     fn expander<'a>(
         &self,
         title: &'a str,
@@ -380,9 +464,12 @@ impl AppModel {
         toggle: Message,
         inner: Element<'a, Message>,
     ) -> Element<'a, Message> {
+        let icon = widget::icon::from_name(
+            if expanded { "go-down-symbolic" } else { "go-next-symbolic" },
+        );
         let header = button::custom(
             widget::row![
-                text::body(if expanded { "▼" } else { "▶" }).size(12),
+                icon,
                 text::body(title),
             ]
             .spacing(6)
@@ -401,31 +488,10 @@ impl AppModel {
 }
 
 fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
-    let fmt = |v: f64| -> String {
-        let bps = v;
-        let (scaled, prefix) = if bps >= 1_000_000_000.0 {
-            (bps / 1_000_000_000.0, "G")
-        } else if bps >= 1_000_000.0 {
-            (bps / 1_000_000.0, "M")
-        } else if bps >= 1_000.0 {
-            (bps / 1_000.0, "k")
-        } else {
-            (bps, "")
-        };
-        let suf = if units == "bytes" { "B/s" } else { "bps" };
-        if scaled >= 10.0 {
-            format!("{:.0} {}{}", scaled, prefix, suf)
-        } else if scaled >= 1.0 {
-            format!("{:.1} {}{}", scaled, prefix, suf)
-        } else if scaled > 0.0 {
-            format!("{:.2} {}{}", scaled, prefix, suf)
-        } else {
-            format!("0 {suf}")
-        }
-    };
-
     let rx_v = if units == "bytes" { rx / 8.0 } else { rx };
     let tx_v = if units == "bytes" { tx / 8.0 } else { tx };
+
+    let fmt = |v| AppModel::format_compact_speed(v, units);
 
     widget::container(
         widget::row![
@@ -435,7 +501,7 @@ fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
         ]
         .align_y(Alignment::Center),
     )
-    .padding([8, 12, 4, 12])
+    .padding([8, 12])
     .into()
 }
 
@@ -447,7 +513,7 @@ fn today_section(rx: u64, tx: u64) -> Element<'static, Message> {
             text::title1(volume_str(total)),
             text::body(format!("↓ {}  ↑ {}", volume_str(rx), volume_str(tx))),
         ]
-        .spacing(2),
+        .spacing(4),
     )
     .padding([8, 12])
     .into()
@@ -466,7 +532,7 @@ fn monthly_content(
         widget::row![
             text::body(format!("↓ {}  ↑ {}", volume_str(this_rx), volume_str(this_tx))),
         ]
-        .padding([2, 12]),
+        .padding([4, 12]),
         widget::row![
             text::body("Last Month").width(Length::Fill),
             text::body(volume_str(last_rx + last_tx)),
@@ -475,7 +541,7 @@ fn monthly_content(
         widget::row![
             text::body(format!("↓ {}  ↑ {}", volume_str(last_rx), volume_str(last_tx))),
         ]
-        .padding([2, 12]),
+        .padding([4, 12]),
     ]
     .spacing(4)
     .padding([0, 0, 8, 0])
@@ -506,23 +572,104 @@ fn details_content(iface: String, ip: String, vpn: bool) -> Element<'static, Mes
     .into()
 }
 
+fn tooltip_popup_content(today_rx: u64, today_tx: u64, month_rx: u64, month_tx: u64) -> Element<'static, Message> {
+    let total = today_rx + today_tx;
+    widget::container(
+        widget::column![
+            text::body("Today").size(12),
+            text::title1(volume_str(total)),
+            text::body(format!("↓ {}  ↑ {}", volume_str(today_rx), volume_str(today_tx))).size(12),
+            widget::divider::horizontal::default(),
+            text::body("This Month").size(12),
+            text::body(format!("↓ {}  ↑ {}", volume_str(month_rx), volume_str(month_tx))).size(12),
+        ]
+        .spacing(2),
+    )
+    .padding(12)
+    .into()
+}
+
+fn settings_content(config: &Config, interfaces: &[String]) -> Element<'static, Message> {
+    let presets: &[&str] = &["compact", "standard", "detailed"];
+    let unit_opts: &[&str] = &["bps", "bytes"];
+
+    let panel_preset: &str = &*Box::leak(config.panel_preset.clone().into_boxed_str());
+    let speed_units: &str = &*Box::leak(config.speed_units.clone().into_boxed_str());
+    let network_interface: &str = &*Box::leak(config.network_interface.clone().into_boxed_str());
+
+    let mut iface_opts: Vec<&str> = vec!["auto"];
+    iface_opts.extend(interfaces.iter().map(|s| &*Box::leak(s.clone().into_boxed_str())));
+    let iface_slice: &[&str] = &*Box::leak(iface_opts.into_boxed_slice());
+
+    widget::column![
+        settings::item(
+            "Panel Preset",
+            pick_list(presets, Some(panel_preset), |s| Message::SetPanelPreset(s.to_string())),
+        ),
+        settings::item(
+            "Speed Units",
+            pick_list(unit_opts, Some(speed_units), |s| Message::SetSpeedUnits(s.to_string())),
+        ),
+        settings::item(
+            "Refresh Interval (ms)",
+            widget::row![
+                widget::slider(200.0..=5000.0f64, config.refresh_interval as f64, |v| Message::SetRefreshInterval(v as u64))
+                    .step(100.0)
+                    .width(Length::Fill),
+                text::body(format!("{}ms", config.refresh_interval)).width(Length::Fixed(50.0)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ),
+        settings::item(
+            "Interface",
+            pick_list(iface_slice, Some(network_interface), |s| Message::SetNetworkInterface(s.to_string())),
+        ),
+    ]
+    .spacing(4)
+    .padding([0, 0, 8, 0])
+    .into()
+}
+
 fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let is_dark = theme.cosmic().is_dark;
     let bg = if theme.transparent {
-        cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
-            cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
-                .add_stop(0.0, cosmic::iced::Color::from_rgba8(0x27, 0x27, 0x27, 0.55))
-                .add_stop(1.0, cosmic::iced::Color::from_rgba8(0x10, 0x10, 0x10, 0.75)),
-        ))
-    } else {
+        if is_dark {
+            cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
+                cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
+                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0x27, 0x27, 0x27, 0.55))
+                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0x10, 0x10, 0x10, 0.75)),
+            ))
+        } else {
+            cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
+                cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
+                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0xF5, 0xF5, 0xF5, 0.65))
+                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0xE8, 0xE8, 0xE8, 0.80)),
+            ))
+        }
+    } else if is_dark {
         cosmic::iced::Background::Color(cosmic::iced::Color::from_rgb8(0x27, 0x27, 0x27))
+    } else {
+        cosmic::iced::Background::Color(cosmic::iced::Color::from_rgb8(0xF0, 0xF0, 0xF0))
+    };
+    let (text_col, border_col) = if is_dark {
+        (
+            cosmic::iced::Color::from_rgb8(0xF3, 0xF1, 0xEC),
+            cosmic::iced::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.08),
+        )
+    } else {
+        (
+            cosmic::iced::Color::from_rgb8(0x1A, 0x1A, 0x1A),
+            cosmic::iced::Color::from_rgba8(0x00, 0x00, 0x00, 0.08),
+        )
     };
     cosmic::widget::container::Style {
         background: Some(bg),
-        text_color: Some(cosmic::iced::Color::from_rgb8(0xF3, 0xF1, 0xEC)),
+        text_color: Some(text_col),
         border: cosmic::iced::Border {
             radius: 12.0.into(),
             width: 1.0,
-            color: cosmic::iced::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0.08),
+            color: border_col,
         },
         ..Default::default()
     }
