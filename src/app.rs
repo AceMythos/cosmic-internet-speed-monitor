@@ -8,7 +8,6 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id;
 use cosmic::iced::{Alignment, Length, Limits, Subscription};
-use cosmic::iced::widget::pick_list;
 use cosmic::widget::{self, button, settings, text};
 use cosmic::{Action, Element, Task};
 
@@ -89,9 +88,9 @@ pub enum Message {
     ToggleMonthly,
     ToggleDetails,
     SetRefreshInterval(u64),
-    SetPanelPreset(String),
-    SetSpeedUnits(String),
-    SetNetworkInterface(String),
+    SetPanelPreset(usize),
+    SetSpeedUnits(usize),
+    SetNetworkInterface(usize),
     ToggleSettings,
 }
 
@@ -349,17 +348,25 @@ impl cosmic::Application for AppModel {
                 self.config.refresh_interval = val;
                 self.persist_config();
             }
-            Message::SetPanelPreset(val) => {
-                self.config.panel_preset = val;
-                self.persist_config();
+            Message::SetPanelPreset(idx) => {
+                let presets = ["compact", "standard", "detailed"];
+                if let Some(val) = presets.get(idx) {
+                    self.config.panel_preset = val.to_string();
+                    self.persist_config();
+                }
             }
-            Message::SetSpeedUnits(val) => {
-                self.config.speed_units = val;
-                self.persist_config();
+            Message::SetSpeedUnits(idx) => {
+                let opts = ["bps", "bytes"];
+                if let Some(val) = opts.get(idx) {
+                    self.config.speed_units = val.to_string();
+                    self.persist_config();
+                }
             }
-            Message::SetNetworkInterface(val) => {
-                self.config.network_interface = val;
-                self.persist_config();
+            Message::SetNetworkInterface(idx) => {
+                if let Some(val) = self.settings_iface_opts.get(idx) {
+                    self.config.network_interface = val.clone();
+                    self.persist_config();
+                }
             }
         }
         Task::none()
@@ -373,13 +380,18 @@ impl cosmic::Application for AppModel {
 impl AppModel {
     fn format_panel_speed(&self) -> String {
         let units = &self.config.speed_units;
-        let rx = Self::format_compact_speed(self.rx_speed, units);
-        let tx = Self::format_compact_speed(self.tx_speed, units);
+        let precision = match self.config.panel_preset.as_str() {
+            "standard" => Some(1),
+            "detailed" => Some(2),
+            _ => Some(0),
+        };
+        let rx = Self::format_compact_speed(self.rx_speed, units, precision);
+        let tx = Self::format_compact_speed(self.tx_speed, units, precision);
 
         format!("↓{} | ↑{}", rx, tx)
     }
 
-    fn format_compact_speed(value_bps: f64, units: &str) -> String {
+    fn format_compact_speed(value_bps: f64, units: &str, precision: Option<usize>) -> String {
         let v = if units == "bytes" { value_bps / 8.0 } else { value_bps };
         let suf = if units == "bytes" { "B/s" } else { "bps" };
 
@@ -393,7 +405,13 @@ impl AppModel {
             (v, "")
         };
 
-        if scaled >= 10.0 {
+        if let Some(p) = precision {
+            if scaled >= 1000.0 {
+                format!("{:.0} {}{}", scaled, prefix, suf)
+            } else {
+                format!("{:.p$} {}{}", scaled, prefix, suf, p = p)
+            }
+        } else if scaled >= 10.0 {
             format!("{:.0} {}{}", scaled, prefix, suf)
         } else if scaled >= 1.0 {
             let s = format!("{:.1} {}{}", scaled, prefix, suf);
@@ -445,15 +463,18 @@ impl AppModel {
         let unit_opts: &[&str] = &["bps", "bytes"];
 
         let interval = self.config.refresh_interval;
+        let preset_idx = presets.iter().position(|&p| p == self.config.panel_preset.as_str());
+        let units_idx = unit_opts.iter().position(|&u| u == self.config.speed_units.as_str());
+        let iface_idx = self.settings_iface_opts.iter().position(|i| i == &self.config.network_interface);
 
         widget::column![
             settings::item(
                 "Panel Preset",
-                pick_list(presets, Some(self.config.panel_preset.as_str()), |s| Message::SetPanelPreset(s.to_string())),
+                widget::dropdown::dropdown(presets, preset_idx, Message::SetPanelPreset),
             ),
             settings::item(
                 "Speed Units",
-                pick_list(unit_opts, Some(self.config.speed_units.as_str()), |s| Message::SetSpeedUnits(s.to_string())),
+                widget::dropdown::dropdown(unit_opts, units_idx, Message::SetSpeedUnits),
             ),
             settings::item(
                 "Refresh Interval (ms)",
@@ -469,7 +490,7 @@ impl AppModel {
             ),
             settings::item(
                 "Interface",
-                pick_list(self.settings_iface_opts.as_slice(), Some(&self.config.network_interface), |s| Message::SetNetworkInterface(s)),
+                widget::dropdown::dropdown(self.settings_iface_opts.as_slice(), iface_idx, Message::SetNetworkInterface),
             ),
         ]
         .spacing(4)
@@ -482,7 +503,7 @@ fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
     let rx_v = if units == "bytes" { rx / 8.0 } else { rx };
     let tx_v = if units == "bytes" { tx / 8.0 } else { tx };
 
-    let fmt = |v| AppModel::format_compact_speed(v, units);
+    let fmt = |v| AppModel::format_compact_speed(v, units, None);
 
     widget::container(
         widget::row![
