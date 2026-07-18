@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Internet Speed Monitor
+Type=Application
+Exec=internet-speed-monitor
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Iced;Network;Speed;
+Icon=network-transmit-receive-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=End
+X-OverflowPriority=10
