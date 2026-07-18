@@ -15,7 +15,7 @@ pub fn read_proc_net_dev() -> Result<HashMap<String, InterfaceStats>, String> {
     let mut interfaces = HashMap::new();
 
     for line in content.lines().skip(2) {
-        let parts: Vec<&str> = line.split(':').collect();
+        let parts: Vec<&str> = line.splitn(2, ':').collect();
         if parts.len() < 2 {
             continue;
         }

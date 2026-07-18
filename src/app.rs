@@ -8,7 +8,8 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id;
 use cosmic::iced::{Alignment, Length, Limits, Subscription};
-use cosmic::widget::{self, button, text};
+use cosmic::iced::widget::pick_list;
+use cosmic::widget::{self, button, settings, text};
 use cosmic::{Action, Element, Task};
 
 use crate::backend;
@@ -21,12 +22,12 @@ pub struct AppModel {
     core: Core,
     popup: Option<Id>,
     config: Config,
+    config_ctx: Option<cosmic_config::Config>,
 
     interface: String,
+    available_interfaces: Vec<String>,
     rx_speed: f64,
     tx_speed: f64,
-    session_rx: u64,
-    session_tx: u64,
     local_ip: String,
     no_interface: bool,
 
@@ -42,6 +43,7 @@ pub struct AppModel {
 
     monthly_expanded: bool,
     details_expanded: bool,
+    settings_expanded: bool,
 
     last_tick: Instant,
 }
@@ -52,11 +54,11 @@ impl Default for AppModel {
             core: Core::default(),
             popup: None,
             config: Config::default(),
+            config_ctx: None,
             interface: String::new(),
+            available_interfaces: Vec::new(),
             rx_speed: 0.0,
             tx_speed: 0.0,
-            session_rx: 0,
-            session_tx: 0,
             local_ip: String::new(),
             no_interface: true,
             records: Vec::new(),
@@ -69,6 +71,7 @@ impl Default for AppModel {
             prev_sample: None,
             monthly_expanded: false,
             details_expanded: false,
+            settings_expanded: false,
             last_tick: Instant::now(),
         }
     }
@@ -83,6 +86,11 @@ pub enum Message {
     StatsLoaded(Vec<storage::DailyRecord>),
     ToggleMonthly,
     ToggleDetails,
+    SetRefreshInterval(u64),
+    SetPanelPreset(String),
+    SetSpeedUnits(String),
+    SetNetworkInterface(String),
+    ToggleSettings,
 }
 
 impl cosmic::Application for AppModel {
@@ -100,16 +108,15 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Action<Self::Message>>) {
-        let cfg = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
-            .map(|context| match Config::get_entry(&context) {
-                Ok(config) => config,
-                Err((_errors, config)) => config,
-            })
+        let config_ctx = cosmic_config::Config::new(Self::APP_ID, Config::VERSION).ok();
+        let cfg = config_ctx.as_ref()
+            .and_then(|ctx| Config::get_entry(ctx).ok().map(|(c, _)| c))
             .unwrap_or_default();
 
         let app = Self {
             core,
             config: cfg,
+            config_ctx,
             last_tick: Instant::now(),
             ..Default::default()
         };
@@ -182,10 +189,12 @@ impl cosmic::Application for AppModel {
                 std::any::TypeId::of::<()>(),
                 |_state| {
                     futures_util::stream::unfold(
-                        (),
-                        |_| async move {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                            Some((Message::Tick, ()))
+                        false,
+                        |initialized| async move {
+                            if initialized {
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                            }
+                            Some((Message::Tick, true))
                         },
                     )
                 },
@@ -246,6 +255,8 @@ impl cosmic::Application for AppModel {
 
                 if !curr.contains_key(&interface) {
                     self.no_interface = true;
+                    self.rx_speed = 0.0;
+                    self.tx_speed = 0.0;
                     return Task::none();
                 }
                 self.no_interface = false;
@@ -254,7 +265,7 @@ impl cosmic::Application for AppModel {
                     self.local_ip = backend::local_ip().unwrap_or_default();
                 }
 
-                if let Some((ref prev, ref ts)) = self.prev_sample.clone() {
+                if let Some((prev, ts)) = self.prev_sample.as_ref() {
                     let dur = now.duration_since(*ts);
                     if let Some((rx, tx)) = backend::compute_speed(prev, &curr, dur, &interface) {
                         let prev_rx = prev.get(&interface).map(|s| s.rx_bytes).unwrap_or(0);
@@ -265,8 +276,6 @@ impl cosmic::Application for AppModel {
                         let rx_diff = curr_rx.saturating_sub(prev_rx);
                         let tx_diff = curr_tx.saturating_sub(prev_tx);
 
-                        self.session_rx = self.session_rx.saturating_add(rx_diff);
-                        self.session_tx = self.session_tx.saturating_add(tx_diff);
                         self.rx_speed = rx;
                         self.tx_speed = tx;
 
@@ -328,8 +337,9 @@ impl cosmic::Application for AppModel {
 
 impl AppModel {
     fn format_panel_speed(&self) -> String {
-        let rx = Self::format_compact_speed(self.rx_speed);
-        let tx = Self::format_compact_speed(self.tx_speed);
+        let units = &self.config.speed_units;
+        let rx = Self::format_compact_speed(self.rx_speed, units);
+        let tx = Self::format_compact_speed(self.tx_speed, units);
 
         match self.config.panel_preset.as_str() {
             "standard" => format!("↓{} ↑{}", rx, tx),
@@ -338,25 +348,28 @@ impl AppModel {
         }
     }
 
-    fn format_compact_speed(value_bps: f64) -> String {
-        let (scaled, prefix) = if value_bps >= 1_000_000_000.0 {
-            (value_bps / 1_000_000_000.0, "G")
-        } else if value_bps >= 1_000_000.0 {
-            (value_bps / 1_000_000.0, "M")
-        } else if value_bps >= 1_000.0 {
-            (value_bps / 1_000.0, "K")
+    fn format_compact_speed(value_bps: f64, units: &str) -> String {
+        let v = if units == "bytes" { value_bps / 8.0 } else { value_bps };
+        let suf = if units == "bytes" { "B/s" } else { "bps" };
+
+        let (scaled, prefix) = if v >= 1_000_000_000.0 {
+            (v / 1_000_000_000.0, "G")
+        } else if v >= 1_000_000.0 {
+            (v / 1_000_000.0, "M")
+        } else if v >= 1_000.0 {
+            (v / 1_000.0, "k")
         } else {
-            (value_bps, "")
+            (v, "")
         };
 
         if scaled >= 10.0 {
-            format!("{:.0} {}bps", scaled, prefix)
+            format!("{:.0} {}{}", scaled, prefix, suf)
         } else if scaled >= 1.0 {
-            format!("{:.1} {}bps", scaled, prefix)
+            format!("{:.1} {}{}", scaled, prefix, suf)
         } else if scaled > 0.0 {
-            format!("{:.2} {}bps", scaled, prefix)
+            format!("{:.2} {}{}", scaled, prefix, suf)
         } else {
-            "0 bps".to_string()
+            format!("0 {suf}")
         }
     }
 
@@ -395,17 +408,17 @@ fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
         } else if bps >= 1_000_000.0 {
             (bps / 1_000_000.0, "M")
         } else if bps >= 1_000.0 {
-            (bps / 1_000.0, "K")
+            (bps / 1_000.0, "k")
         } else {
             (bps, "")
         };
         let suf = if units == "bytes" { "B/s" } else { "bps" };
         if scaled >= 10.0 {
-            format!("{:.0}{}{}", scaled, prefix, suf)
+            format!("{:.0} {}{}", scaled, prefix, suf)
         } else if scaled >= 1.0 {
-            format!("{:.1}{}{}", scaled, prefix, suf)
+            format!("{:.1} {}{}", scaled, prefix, suf)
         } else if scaled > 0.0 {
-            format!("{:.2}{}{}", scaled, prefix, suf)
+            format!("{:.2} {}{}", scaled, prefix, suf)
         } else {
             format!("0 {suf}")
         }
@@ -518,11 +531,11 @@ fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style 
 fn volume_str(bytes: u64) -> String {
     let value = bytes as f64;
     let (scaled, prefix) = if value >= 1_000_000_000_000.0 {
-        (value / 1_000_000_000_000.0, "T")
+        (value / 1_000_000_000_000.0, "TB")
     } else if value >= 1_000_000_000.0 {
-        (value / 1_000_000_000.0, "G")
+        (value / 1_000_000_000.0, "GB")
     } else if value >= 1_000_000.0 {
-        (value / 1_000_000.0, "M")
+        (value / 1_000_000.0, "MB")
     } else if value >= 1_000.0 {
         (value / 1_000.0, "kB")
     } else {
