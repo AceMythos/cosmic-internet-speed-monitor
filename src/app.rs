@@ -590,14 +590,14 @@ fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style 
         if is_dark {
             cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
                 cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
-                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0x27, 0x27, 0x27, 0.55))
-                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0x10, 0x10, 0x10, 0.75)),
+                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0x2D, 0x2D, 0x2D, 0.72))
+                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0x15, 0x15, 0x15, 0.88)),
             ))
         } else {
             cosmic::iced::Background::Gradient(cosmic::iced::Gradient::Linear(
                 cosmic::iced::gradient::Linear::new(std::f32::consts::PI)
-                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0xF5, 0xF5, 0xF5, 0.65))
-                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0xE8, 0xE8, 0xE8, 0.80)),
+                    .add_stop(0.0, cosmic::iced::Color::from_rgba8(0xF2, 0xF2, 0xF2, 0.80))
+                    .add_stop(1.0, cosmic::iced::Color::from_rgba8(0xE0, 0xE0, 0xE0, 0.92)),
             ))
         }
     } else if is_dark {
