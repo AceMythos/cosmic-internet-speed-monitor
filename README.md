@@ -25,6 +25,8 @@
 ## Quick start
 
 ```sh
+git clone https://github.com/AceMythos/cosmic-internet-speed-monitor
+cd cosmic-internet-speed-monitor
 sudo apt install iw     # optional: Wi-Fi SSID & link speed
 cargo build --release
 pkexec install -m 755 target/release/internet-speed-monitor /usr/bin/
