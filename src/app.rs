@@ -745,16 +745,13 @@ impl AppModel {
 // ── Free functions ──────────────────────────────────────────────────────────
 
 fn speed_section(rx: f64, tx: f64, units: &str) -> Element<'static, Message> {
-    let rx_v = if units == "bytes" { rx / 8.0 } else { rx };
-    let tx_v = if units == "bytes" { tx / 8.0 } else { tx };
-
     let fmt = |v| AppModel::format_compact_speed(v, units, None);
 
     widget::container(
         widget::row![
-            text::body(format!("↓ {}", fmt(rx_v))),
+            text::body(format!("↓ {}", fmt(rx))),
             widget::Space::new().width(Length::Fixed(16.0)),
-            text::body(format!("↑ {}", fmt(tx_v))),
+            text::body(format!("↑ {}", fmt(tx))),
         ]
         .align_y(Alignment::Center),
     )
