@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "com.github.AceMythos.InternetSpeedMonitor";
@@ -9,6 +9,15 @@ const APP_ID: &str = "com.github.AceMythos.InternetSpeedMonitor";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyRecord {
     pub date: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    #[serde(default)]
+    pub hourly: Vec<HourlySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HourlySnapshot {
+    pub hour: u8,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
 }
@@ -75,8 +84,16 @@ fn try_load_from(path: &Path) -> Result<Option<Vec<DailyRecord>>, String> {
         return Ok(None);
     }
     let json = fs::read_to_string(path).map_err(|e| format!("cannot read: {e}"))?;
-    let state: PersistedState =
+    let mut state: PersistedState =
         serde_json::from_str(&json).map_err(|e| format!("invalid JSON: {e}"))?;
+
+    // Backward compatibility: version 1 data doesn't have hourly snapshots
+    if state.version == 1 {
+        for record in &mut state.records {
+            record.hourly = Vec::new();
+        }
+    }
+
     Ok(Some(state.records))
 }
 
@@ -105,7 +122,7 @@ fn save_stats_sync(records: &[DailyRecord]) {
     }
 
     let state = PersistedState {
-        version: 1,
+        version: 2,
         records: records.to_vec(),
     };
 
@@ -181,6 +198,7 @@ pub fn update_today(mut records: Vec<DailyRecord>, rx_add: u64, tx_add: u64) -> 
             date: today,
             rx_bytes: rx_add,
             tx_bytes: tx_add,
+            hourly: Vec::new(),
         });
     }
 
@@ -190,4 +208,59 @@ pub fn update_today(mut records: Vec<DailyRecord>, rx_add: u64, tx_add: u64) -> 
     });
 
     records
+}
+
+pub fn update_hourly(mut records: Vec<DailyRecord>, rx_add: u64, tx_add: u64) -> Vec<DailyRecord> {
+    let today = today_key();
+    let hour = Local::now().hour() as u8;
+
+    if let Some(record) = records.iter_mut().find(|r| r.date == today) {
+        if let Some(snapshot) = record.hourly.iter_mut().find(|s| s.hour == hour) {
+            snapshot.rx_bytes = snapshot.rx_bytes.saturating_add(rx_add);
+            snapshot.tx_bytes = snapshot.tx_bytes.saturating_add(tx_add);
+        } else {
+            record.hourly.push(HourlySnapshot {
+                hour,
+                rx_bytes: rx_add,
+                tx_bytes: tx_add,
+            });
+        }
+    }
+    // If no today's record exists yet, nothing to update hourly for
+
+    records
+}
+
+pub fn apply_retention(records: Vec<DailyRecord>, days: u64) -> Vec<DailyRecord> {
+    let today = Local::now().date_naive();
+    let cutoff = today - chrono::Duration::days(days as i64);
+
+    records
+        .into_iter()
+        .filter(|r| {
+            key_to_date(&r.date)
+                .is_some_and(|d| d >= cutoff)
+        })
+        .collect()
+}
+
+pub fn clear_today(mut records: Vec<DailyRecord>) -> Vec<DailyRecord> {
+    let today = today_key();
+    records.retain(|r| r.date != today);
+    records
+}
+
+pub fn clear_month(mut records: Vec<DailyRecord>) -> Vec<DailyRecord> {
+    let now = Local::now();
+    let target_month = (now.year(), now.month());
+    records.retain(|r| {
+        key_to_date(&r.date)
+            .is_some_and(|d| (d.year(), d.month()) != target_month)
+    });
+    records
+}
+
+#[allow(dead_code)]
+pub fn clear_all() -> Vec<DailyRecord> {
+    Vec::new()
 }

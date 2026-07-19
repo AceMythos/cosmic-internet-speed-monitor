@@ -12,6 +12,7 @@ futures-util = "0.3"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
+rev = "20dfd7c236208930634881ec52d22e7a353206dd"
 features = [
     "applet",
     "applet-token",

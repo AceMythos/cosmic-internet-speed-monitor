@@ -58,6 +58,7 @@ pub fn local_ip() -> Option<String> {
     Some(addr.ip().to_string())
 }
 
+#[allow(dead_code)]
 pub fn vpn_active() -> bool {
     if let Ok(interfaces) = read_proc_net_dev() {
         interfaces.keys().any(|name| {
@@ -111,4 +112,105 @@ pub fn filter_interfaces(stats: &HashMap<String, InterfaceStats>, preferred: &st
     }
 
     stats.keys().next().cloned().unwrap_or_default()
+}
+
+
+/// Parses `/proc/net/route` and returns the gateway IP in dotted-decimal format
+/// for the default route (destination `00000000`).
+pub fn default_gateway() -> Option<String> {
+    let content = fs::read_to_string("/proc/net/route").ok()?;
+    for line in content.lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 && parts[1] == "00000000" {
+            let val = u32::from_str_radix(parts[2], 16).ok()?;
+            let [b0, b1, b2, b3] = val.to_le_bytes();
+            return Some(format!("{}.{}.{}.{}", b0, b1, b2, b3));
+        }
+    }
+    None
+}
+
+/// Reads `/etc/resolv.conf` and returns all configured DNS server IP addresses.
+pub fn dns_servers() -> Vec<String> {
+    let content = fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("nameserver") {
+                trimmed.split_whitespace().nth(1).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Retrieves Wi-Fi information for a given interface by running `iw dev {interface} link`.
+/// Returns `(SSID, signal_dbm, bitrate_mbps)` on success, or `None` on failure.
+pub fn wifi_info(interface: &str) -> Option<(String, i32, u32)> {
+    let output = std::process::Command::new("iw")
+        .args(["dev", interface, "link"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+
+    let mut ssid = None;
+    let mut signal = None;
+    let mut bitrate = None;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("SSID:") {
+            ssid = Some(val.trim().to_string());
+        } else if let Some(val) = trimmed.strip_prefix("signal:") {
+            if let Some(dbm_str) = val.trim().split_whitespace().next() {
+                signal = dbm_str.parse::<i32>().ok();
+            }
+        } else if let Some(val) = trimmed.strip_prefix("tx bitrate:") {
+            if let Some(rate_str) = val.trim().split_whitespace().next() {
+                if let Ok(rate) = rate_str.parse::<f64>() {
+                    bitrate = Some(rate as u32);
+                }
+            }
+        }
+    }
+
+    Some((ssid?, signal?, bitrate?))
+}
+
+/// Reads `/proc/net/if_inet6` and returns the IPv6 address for the given interface
+/// in standard colon-separated notation.
+pub fn ipv6_address(interface: &str) -> Option<String> {
+    let content = fs::read_to_string("/proc/net/if_inet6").ok()?;
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts.last() == Some(&interface) {
+            let hex = parts[0];
+            if hex.len() != 32 {
+                continue;
+            }
+            let groups: Vec<String> = hex
+                .as_bytes()
+                .chunks(4)
+                .map(|chunk| {
+                    let s = std::str::from_utf8(chunk).unwrap_or("0000");
+                    s.trim_start_matches('0')
+                })
+                .map(|s| if s.is_empty() { "0".to_string() } else { s.to_string() })
+                .collect();
+            return Some(groups.join(":"));
+        }
+    }
+    None
+}
+
+/// Checks whether the given network interface is wireless by testing if
+/// `/sys/class/net/{interface}/wireless` exists as a directory.
+pub fn is_wireless(interface: &str) -> bool {
+    let path = format!("/sys/class/net/{}/wireless", interface);
+    std::path::Path::new(&path).is_dir()
 }
