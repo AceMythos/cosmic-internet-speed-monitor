@@ -58,7 +58,6 @@ pub struct AppModel {
     link_speed: String,
     connection_duration: String,
     is_wireless: bool,
-    network_info_loaded: bool,
     connection_start: Option<Instant>,
     last_retention_date: Option<NaiveDate>,
 
@@ -100,7 +99,6 @@ impl Default for AppModel {
             link_speed: String::new(),
             connection_duration: String::new(),
             is_wireless: false,
-            network_info_loaded: false,
             connection_start: None,
             last_retention_date: None,
             selected_today_bar: None,
@@ -156,7 +154,6 @@ impl cosmic::Application for AppModel {
             core,
             config: cfg,
             config_ctx,
-            network_info_loaded: false,
             ..Default::default()
         };
 
@@ -322,23 +319,26 @@ impl cosmic::Application for AppModel {
 
                     let base = get_popup(popup_settings);
 
-                    if !self.network_info_loaded {
-                        let iface = self.interface.clone();
-                        let fetch_task = Task::perform(
-                            async move {
-                                let gw = backend::default_gateway().unwrap_or_default();
-                                let ip6 = backend::ipv6_address(&iface).unwrap_or_default();
-                                let (ssid, sig, link) =
-                                    backend::wifi_info(&iface).unwrap_or_default();
-                                let dns = backend::dns_servers().join(",");
-                                vec![gw, ip6, ssid, sig.to_string(), link.to_string(), dns]
-                            },
-                            |data| Action::App(Message::NetworkInfoLoaded(data)),
-                        );
-                        return Task::batch(vec![base, fetch_task]);
-                    }
+                    let iface = self.interface.clone();
+                    let fetch_task = Task::perform(
+                        async move {
+                            let gw = backend::default_gateway().unwrap_or_default();
+                            let ip6 = backend::ipv6_address(&iface).unwrap_or_default();
+                            let dns = backend::dns_servers().join(",");
 
-                    base
+                            let (ssid, sig, link) =
+                                if let Some(info) = backend::wifi_info(&iface) {
+                                    info
+                                } else {
+                                    let sig = backend::wifi_signal(&iface).unwrap_or(0);
+                                    (String::new(), sig, 0)
+                                };
+
+                            vec![gw, ip6, ssid, sig.to_string(), link.to_string(), dns]
+                        },
+                        |data| Action::App(Message::NetworkInfoLoaded(data)),
+                    );
+                    return Task::batch(vec![base, fetch_task]);
                 };
             }
             Message::PopupClosed(popup_id) => {
@@ -547,7 +547,6 @@ impl cosmic::Application for AppModel {
                     };
                 }
                 self.is_wireless = backend::is_wireless(&self.interface);
-                self.network_info_loaded = true;
             }
             Message::TodayBarSelected(bar) => {
                 self.selected_today_bar = bar;

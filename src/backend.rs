@@ -208,6 +208,24 @@ pub fn ipv6_address(interface: &str) -> Option<String> {
     None
 }
 
+/// Parses `/proc/net/wireless` and returns the signal level in dBm for the
+/// given interface, or `None` if unavailable.
+pub fn wifi_signal(interface: &str) -> Option<i32> {
+    let content = fs::read_to_string("/proc/net/wireless").ok()?;
+    for line in content.lines().skip(2) {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(&format!("{}:", interface)) {
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            if fields.len() >= 3 {
+                // fields[1] is signal level, e.g. "-50."
+                let sig_str = fields[1].trim_end_matches('.');
+                return sig_str.parse::<i32>().ok();
+            }
+        }
+    }
+    None
+}
+
 /// Checks whether the given network interface is wireless by testing if
 /// `/sys/class/net/{interface}/wireless` exists as a directory.
 pub fn is_wireless(interface: &str) -> bool {
