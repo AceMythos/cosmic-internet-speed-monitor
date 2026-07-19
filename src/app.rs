@@ -61,6 +61,9 @@ pub struct AppModel {
     network_info_loaded: bool,
     connection_start: Option<Instant>,
     last_retention_date: Option<NaiveDate>,
+
+    selected_today_bar: Option<usize>,
+    selected_monthly_bar: Option<usize>,
 }
 
 impl Default for AppModel {
@@ -100,6 +103,8 @@ impl Default for AppModel {
             network_info_loaded: false,
             connection_start: None,
             last_retention_date: None,
+            selected_today_bar: None,
+            selected_monthly_bar: None,
         }
     }
 }
@@ -122,6 +127,8 @@ pub enum Message {
     ResetToday,
     ResetMonthly,
     NetworkInfoLoaded(Vec<String>),
+    TodayBarSelected(Option<usize>),
+    MonthlyBarSelected(Option<usize>),
 }
 
 impl cosmic::Application for AppModel {
@@ -228,7 +235,7 @@ impl cosmic::Application for AppModel {
                     .collect()
             })
             .unwrap_or_else(|| vec![0.0; 24]);
-        col.push(today_graph(hourly));
+        col.push(today_graph(hourly, self.selected_today_bar));
 
         // 5. Subtle divider
         col.push(subtle_divider());
@@ -242,6 +249,7 @@ impl cosmic::Application for AppModel {
                 &self.records,
                 self.this_month_rx,
                 self.this_month_tx,
+                self.selected_monthly_bar,
             ),
         ));
         col.push(subtle_divider());
@@ -336,6 +344,8 @@ impl cosmic::Application for AppModel {
             Message::PopupClosed(popup_id) => {
                 if self.popup.as_ref() == Some(&popup_id) {
                     self.popup = None;
+                    self.selected_today_bar = None;
+                    self.selected_monthly_bar = None;
                 }
             }
             Message::Tick => {
@@ -538,6 +548,12 @@ impl cosmic::Application for AppModel {
                 }
                 self.is_wireless = backend::is_wireless(&self.interface);
                 self.network_info_loaded = true;
+            }
+            Message::TodayBarSelected(bar) => {
+                self.selected_today_bar = bar;
+            }
+            Message::MonthlyBarSelected(bar) => {
+                self.selected_monthly_bar = bar;
             }
         }
         Task::none()
@@ -782,25 +798,53 @@ fn today_section(rx: u64, tx: u64) -> Element<'static, Message> {
     .into()
 }
 
-fn today_graph(hourly: Vec<f64>) -> Element<'static, Message> {
-    if hourly.iter().all(|&v| v == 0.0) {
-        return widget::Space::new()
-            .height(Length::Fixed(32.0))
-            .width(Length::Fill)
-            .into();
-    }
+fn today_graph(hourly: Vec<f64>, selected: Option<usize>) -> Element<'static, Message> {
+    let has_data = hourly.iter().any(|&v| v > 0.0);
     let max = hourly.iter().cloned().fold(0.0_f64, f64::max);
     let bars: Vec<f64> = hourly
         .iter()
         .map(|&v| if max > 0.0 { v / max } else { 0.0 })
         .collect();
 
-    let canvas_widget = Canvas::<TodaySparkline, Message, cosmic::Theme>::new(TodaySparkline { bars })
+    let canvas_widget: Element<'static, Message> = if has_data {
+        Canvas::<TodaySparkline, Message, cosmic::Theme>::new(TodaySparkline {
+            bars,
+            selected,
+        })
         .width(Length::Fill)
-        .height(Length::Fixed(32.0));
+        .height(Length::Fixed(32.0))
+        .into()
+    } else {
+        widget::Space::new()
+            .height(Length::Fixed(32.0))
+            .width(Length::Fill)
+            .into()
+    };
 
-    widget::column![
-        canvas_widget,
+    let selected_label = selected.and_then(|idx| {
+        hourly.get(idx).map(|&v| {
+            let hour_label = format!("{}:00", if idx == 0 { 12 } else if idx < 13 { idx } else { idx - 12 });
+            let ampm = if idx < 12 { "AM" } else { "PM" };
+            if idx == 0 { format!("12AM — {}", volume_str(v as u64)) }
+            else if idx == 12 { format!("12PM — {}", volume_str(v as u64)) }
+            else { format!("{}{} — {}", hour_label, ampm, volume_str(v as u64)) }
+        })
+    });
+
+    let mut col = widget::column![canvas_widget].spacing(2).padding([0, 0, 4, 0]);
+
+    if let Some(label) = selected_label {
+        col = col.push(
+            widget::row![
+                widget::Space::new().width(Length::Fill),
+                text::body(label).size(10),
+                widget::Space::new().width(Length::Fill),
+            ]
+            .padding([0, 12]),
+        );
+    }
+
+    col = col.push(
         widget::row![
             text::body("12A").size(10),
             widget::Space::new().width(Length::FillPortion(6)),
@@ -813,16 +857,16 @@ fn today_graph(hourly: Vec<f64>) -> Element<'static, Message> {
             text::body("Now").size(10),
         ]
         .padding([0, 12, 0, 12]),
-    ]
-    .spacing(2)
-    .padding([0, 0, 4, 0])
-    .into()
+    );
+
+    col.into()
 }
 
 fn monthly_content(
     records: &[storage::DailyRecord],
     this_rx: u64,
     this_tx: u64,
+    selected: Option<usize>,
 ) -> Element<'static, Message> {
     let now = Local::now();
     let this_year = now.year();
@@ -886,11 +930,44 @@ fn monthly_content(
         vec![0.0; days_in_month]
     };
 
-    widget::column![
-        widget::row![text::body("This Month").width(Length::Fill), text::body(volume_str(this_rx + this_tx))].padding([4, 12]),
-        widget::row![text::body(format!("↓ {}    ↑ {}", volume_str(this_rx), volume_str(this_tx)))].padding([4, 12]),
-        widget::row![text::body("Total Daily Usage").width(Length::Fill),].padding([4, 12]),
-        Canvas::<MonthlySparkline, Message, cosmic::Theme>::new(MonthlySparkline { bars: monthly_bars }).width(Length::Fill).height(Length::Fixed(28.0)),
+    let selected_label = selected.and_then(|idx| {
+        daily.get(idx).map(|&v| {
+            if v > 0 {
+                format!("Day {} — {}", idx + 1, volume_str(v))
+            } else {
+                format!("Day {} — No data", idx + 1)
+            }
+        })
+    });
+
+    let mut col = widget::column![]
+        .spacing(4)
+        .padding([0, 0, 8, 0]);
+
+    col = col.push(widget::row![text::body("This Month").width(Length::Fill), text::body(volume_str(this_rx + this_tx))].padding([4, 12]));
+    col = col.push(widget::row![text::body(format!("↓ {}    ↑ {}", volume_str(this_rx), volume_str(this_tx)))].padding([4, 12]));
+    col = col.push(widget::row![text::body("Total Daily Usage").width(Length::Fill),].padding([4, 12]));
+    col = col.push(
+        Canvas::<MonthlySparkline, Message, cosmic::Theme>::new(MonthlySparkline {
+            bars: monthly_bars,
+            selected,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(28.0)),
+    );
+
+    if let Some(label) = selected_label {
+        col = col.push(
+            widget::row![
+                widget::Space::new().width(Length::Fill),
+                text::body(label).size(10),
+                widget::Space::new().width(Length::Fill),
+            ]
+            .padding([0, 12]),
+        );
+    }
+
+    col = col.push(
         widget::row![
             text::body("1").size(10),
             widget::Space::new().width(Length::Fill),
@@ -903,13 +980,11 @@ fn monthly_content(
             text::body(format!("{}", days_in_month)).size(10),
         ]
         .padding([0, 12]),
-        widget::row![text::body("Highest Day").width(Length::Fill), text::body(if max_day > 0 { volume_str(max_day) } else { "-".to_string() })].padding([4, 12]),
-        widget::row![text::body("Average / Day").width(Length::Fill), text::body(if avg > 0 { volume_str(avg) } else { "-".to_string() })].padding([4, 12]),
-        widget::row![text::body("Lowest Day").width(Length::Fill), text::body(if lowest > 0 { volume_str(lowest) } else { "-".to_string() })].padding([4, 12]),
-    ]
-    .spacing(4)
-    .padding([0, 0, 8, 0])
-    .into()
+    );
+    col = col.push(widget::row![text::body("Highest Day").width(Length::Fill), text::body(if max_day > 0 { volume_str(max_day) } else { "-".to_string() })].padding([4, 12]));
+    col = col.push(widget::row![text::body("Average / Day").width(Length::Fill), text::body(if avg > 0 { volume_str(avg) } else { "-".to_string() })].padding([4, 12]));
+    col = col.push(widget::row![text::body("Lowest Day").width(Length::Fill), text::body(if lowest > 0 { volume_str(lowest) } else { "-".to_string() })].padding([4, 12]));
+    col.into()
 }
 
 fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
@@ -965,10 +1040,43 @@ fn volume_str(bytes: u64) -> String {
 
 struct TodaySparkline {
     bars: Vec<f64>,
+    selected: Option<usize>,
 }
 
 impl cosmic::iced::widget::canvas::Program<Message, cosmic::Theme> for TodaySparkline {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &cosmic::iced::widget::canvas::Event,
+        bounds: Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> Option<cosmic::iced::widget::canvas::Action<Message>> {
+        if let cosmic::iced::widget::canvas::Event::Mouse(
+            cosmic::iced::mouse::Event::ButtonPressed(cosmic::iced::mouse::Button::Left),
+        ) = event
+        {
+            if let Some(pos) = cursor.position_in(bounds) {
+                let bar_count = self.bars.len();
+                if bar_count > 0 {
+                    let bar_width = bounds.width / bar_count as f32;
+                    let idx = (pos.x / bar_width) as usize;
+                    if idx < bar_count {
+                        let gap = 1.0_f32;
+                        let draw_w = (bar_width - gap).max(1.0);
+                        let bar_x = idx as f32 * bar_width;
+                        if pos.x >= bar_x && pos.x < bar_x + draw_w {
+                            let new = if self.selected == Some(idx) { None } else { Some(idx) };
+                            return Some(cosmic::iced::widget::canvas::Action::publish(Message::TodayBarSelected(new)));
+                        }
+                    }
+                }
+            }
+            return Some(cosmic::iced::widget::canvas::Action::publish(Message::TodayBarSelected(None)));
+        }
+        None
+    }
 
     fn draw(
         &self,
@@ -994,10 +1102,15 @@ impl cosmic::iced::widget::canvas::Program<Message, cosmic::Theme> for TodaySpar
             let bar_h = (val as f32 * (height - 2.0)).max(1.0);
             let x = i as f32 * bar_width;
             let y = height - bar_h;
+            let color = if self.selected == Some(i) {
+                Color::from_rgba8(0x7F, 0xAC, 0xE8, 1.0)
+            } else {
+                Color::from_rgba8(0x7F, 0xAC, 0xE8, 0.6)
+            };
             frame.fill_rectangle(
                 Point::new(x, y),
                 cosmic::iced::Size::new(draw_w, bar_h),
-                Color::from_rgba8(0x7F, 0xAC, 0xE8, 0.6),
+                color,
             );
         }
         vec![frame.into_geometry()]
@@ -1006,10 +1119,43 @@ impl cosmic::iced::widget::canvas::Program<Message, cosmic::Theme> for TodaySpar
 
 struct MonthlySparkline {
     bars: Vec<f64>,
+    selected: Option<usize>,
 }
 
 impl cosmic::iced::widget::canvas::Program<Message, cosmic::Theme> for MonthlySparkline {
     type State = ();
+
+    fn update(
+        &self,
+        _state: &mut Self::State,
+        event: &cosmic::iced::widget::canvas::Event,
+        bounds: Rectangle,
+        cursor: cosmic::iced::mouse::Cursor,
+    ) -> Option<cosmic::iced::widget::canvas::Action<Message>> {
+        if let cosmic::iced::widget::canvas::Event::Mouse(
+            cosmic::iced::mouse::Event::ButtonPressed(cosmic::iced::mouse::Button::Left),
+        ) = event
+        {
+            if let Some(pos) = cursor.position_in(bounds) {
+                let n = self.bars.len();
+                if n > 0 {
+                    let bw = bounds.width / n as f32;
+                    let idx = (pos.x / bw) as usize;
+                    if idx < n {
+                        let gap = 1.0_f32;
+                        let dw = (bw - gap).max(1.0);
+                        let bar_x = idx as f32 * bw;
+                        if pos.x >= bar_x && pos.x < bar_x + dw {
+                            let new = if self.selected == Some(idx) { None } else { Some(idx) };
+                            return Some(cosmic::iced::widget::canvas::Action::publish(Message::MonthlyBarSelected(new)));
+                        }
+                    }
+                }
+            }
+            return Some(cosmic::iced::widget::canvas::Action::publish(Message::MonthlyBarSelected(None)));
+        }
+        None
+    }
 
     fn draw(
         &self,
@@ -1031,10 +1177,15 @@ impl cosmic::iced::widget::canvas::Program<Message, cosmic::Theme> for MonthlySp
         let dw = (bw - gap).max(1.0);
         for (i, &v) in self.bars.iter().enumerate() {
             let bh = (v as f32 * (h - 2.0)).max(1.0);
+            let color = if self.selected == Some(i) {
+                Color::from_rgba8(0x7F, 0xAC, 0xE8, 1.0)
+            } else {
+                Color::from_rgba8(0x7F, 0xAC, 0xE8, 0.6)
+            };
             frame.fill_rectangle(
                 Point::new(i as f32 * bw, h - bh),
                 cosmic::iced::Size::new(dw, bh),
-                Color::from_rgba8(0x7F, 0xAC, 0xE8, 0.6),
+                color,
             );
         }
         vec![frame.into_geometry()]
