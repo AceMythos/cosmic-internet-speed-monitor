@@ -202,11 +202,6 @@ pub fn update_today(mut records: Vec<DailyRecord>, rx_add: u64, tx_add: u64) -> 
         });
     }
 
-    records.retain(|r| {
-        key_to_date(&r.date)
-            .is_some_and(|d| d >= NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
-    });
-
     records
 }
 

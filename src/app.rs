@@ -60,6 +60,7 @@ pub struct AppModel {
     is_wireless: bool,
     network_info_loaded: bool,
     connection_start: Option<Instant>,
+    last_retention_date: Option<NaiveDate>,
 }
 
 impl Default for AppModel {
@@ -98,6 +99,7 @@ impl Default for AppModel {
             is_wireless: false,
             network_info_loaded: false,
             connection_start: None,
+            last_retention_date: None,
         }
     }
 }
@@ -117,7 +119,6 @@ pub enum Message {
     SetNetworkInterface(usize),
     ToggleSettings,
     SetDataRetentionDays(usize),
-    SetNotifications(bool),
     ResetToday,
     ResetMonthly,
     NetworkInfoLoaded(Vec<String>),
@@ -405,8 +406,13 @@ impl cosmic::Application for AppModel {
                         let records = std::mem::take(&mut self.records);
                         let records = storage::update_today(records, rx_diff, tx_diff);
                         let records = storage::update_hourly(records, rx_diff, tx_diff);
-                        let records =
-                            storage::apply_retention(records, self.config.data_retention_days);
+                        let today = Local::now().date_naive();
+                        let records = if self.last_retention_date != Some(today) {
+                            self.last_retention_date = Some(today);
+                            storage::apply_retention(records, self.config.data_retention_days)
+                        } else {
+                            records
+                        };
                         self.records = records;
 
                         let agg = storage::aggregate(&self.records);
@@ -482,11 +488,10 @@ impl cosmic::Application for AppModel {
                 if let Some(val) = retention_vals.get(idx) {
                     self.config.data_retention_days = *val;
                     self.persist_config();
+                    let records = std::mem::take(&mut self.records);
+                    self.records = storage::apply_retention(records, *val);
+                    self.last_retention_date = Some(Local::now().date_naive());
                 }
-            }
-            Message::SetNotifications(val) => {
-                self.config.notifications_enabled = val;
-                self.persist_config();
             }
             Message::ResetToday => {
                 self.records = storage::clear_today(std::mem::take(&mut self.records));
@@ -708,10 +713,6 @@ impl AppModel {
             .iter()
             .position(|&v| v == self.config.data_retention_days);
 
-        let notif_toggle = widget::toggler(self.config.notifications_enabled)
-            .on_toggle(Message::SetNotifications)
-            .label(Some("Notifications".to_string()));
-
         widget::column![
             settings::item("Panel Preset", widget::dropdown::dropdown(presets, preset_idx, Message::SetPanelPreset)),
             settings::item("Speed Units", widget::dropdown::dropdown(unit_opts, units_idx, Message::SetSpeedUnits)),
@@ -727,7 +728,6 @@ impl AppModel {
             ),
             settings::item("Interface", widget::dropdown::dropdown(self.settings_iface_opts.as_slice(), iface_idx, Message::SetNetworkInterface)),
             settings::item("Data Retention", widget::dropdown::dropdown(retention_opts, retention_idx, |idx| Message::SetDataRetentionDays(idx))),
-            settings::item("", notif_toggle),
             widget::row![
                 button::custom(text::body("Reset Today")).on_press(Message::ResetToday),
                 widget::Space::new().width(Length::Fixed(8.0)),
