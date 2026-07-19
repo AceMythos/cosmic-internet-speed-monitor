@@ -8,7 +8,6 @@ pub struct Config {
     pub network_interface: String,
     pub speed_units: String,
     pub data_retention_days: u64,
-    pub autostart: bool,
     pub notifications_enabled: bool,
 }
 
@@ -20,7 +19,6 @@ impl Default for Config {
             network_interface: "auto".to_string(),
             speed_units: "auto".to_string(),
             data_retention_days: 30,
-            autostart: false,
             notifications_enabled: false,
         }
     }

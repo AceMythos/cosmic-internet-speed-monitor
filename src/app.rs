@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
 use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, NaiveDate};
@@ -118,7 +117,6 @@ pub enum Message {
     SetNetworkInterface(usize),
     ToggleSettings,
     SetDataRetentionDays(usize),
-    SetAutostart(bool),
     SetNotifications(bool),
     ResetToday,
     ResetMonthly,
@@ -486,20 +484,6 @@ impl cosmic::Application for AppModel {
                     self.persist_config();
                 }
             }
-            Message::SetAutostart(val) => {
-                self.config.autostart = val;
-                self.persist_config();
-                let home = std::env::var("HOME").unwrap_or_default();
-                let autostart_dir = format!("{}/.config/autostart", home);
-                let desktop_file = format!("{}/internet-speed-monitor.desktop", autostart_dir);
-                if val {
-                    let src = "/usr/share/applications/internet-speed-monitor.desktop";
-                    let _ = fs::create_dir_all(&autostart_dir);
-                    let _ = fs::copy(src, &desktop_file);
-                } else {
-                    let _ = fs::remove_file(&desktop_file);
-                }
-            }
             Message::SetNotifications(val) => {
                 self.config.notifications_enabled = val;
                 self.persist_config();
@@ -634,7 +618,8 @@ impl AppModel {
         )
         .on_press(toggle)
         .padding([8, 12])
-        .width(Length::Fill);
+        .width(Length::Fill)
+        .class(cosmic::theme::Button::ListItem([4.0; 4]));
 
         if expanded {
             widget::column![header, inner].spacing(0).into()
@@ -654,23 +639,50 @@ impl AppModel {
         } else {
             &self.interface
         };
+
+        let label_w = Length::Fixed(100.0);
+        let val_w = Length::Fill;
+
+        let signal = &self.signal_level;
+        let signal_str = if signal.is_empty() || signal == "0" {
+            "—".to_string()
+        } else {
+            format!("{} dBm", signal)
+        };
+        let link = &self.link_speed;
+        let link_str = if link.is_empty() || link == "0" {
+            "—".to_string()
+        } else {
+            format!("{} Mbps", link)
+        };
+        let ipv6_str = if self.ipv6.is_empty() {
+            "—".to_string()
+        } else {
+            let parts: Vec<&str> = self.ipv6.splitn(5, ':').collect();
+            if parts.len() > 4 {
+                format!("{}:\n{}", parts[..4].join(":"), parts[4..].join(":"))
+            } else {
+                self.ipv6.clone()
+            }
+        };
+
         widget::column![
-            widget::row![text::body(conn_type).width(Length::Fill)].padding([4, 12]),
-            widget::row![text::body(network_name).width(Length::Fill)].padding([4, 12]),
-            widget::row![text::body("Interface").width(Length::Fill), text::body(&self.interface)].padding([4, 12]),
-            widget::row![text::body("IPv4").width(Length::Fill), text::body(&self.local_ip)].padding([4, 12]),
-            widget::row![text::body("IPv6").width(Length::Fill), text::body(if self.ipv6.is_empty() { "—".to_string() } else { self.ipv6.clone() })].padding([4, 12]),
-            widget::row![text::body("Gateway").width(Length::Fill), text::body(if self.gateway.is_empty() { "—".to_string() } else { self.gateway.clone() })].padding([4, 12]),
-            widget::row![text::body("DNS").width(Length::Fill), text::body(self.dns_servers.first().map(|s| s.as_str()).unwrap_or("—"))].padding([4, 12]),
+            widget::row![text::body(conn_type).width(Length::Fill)].padding([4, 12, 0, 12]),
+            widget::row![text::body(network_name).width(Length::Fill)].padding([0, 12, 4, 12]),
+            widget::row![text::body("Interface").width(label_w), text::body(&self.interface).width(val_w)].padding([4, 12]),
+            widget::row![text::body("IPv4").width(label_w), text::body(&self.local_ip).width(val_w)].padding([4, 12]),
+            widget::row![text::body("IPv6").width(label_w), text::body(ipv6_str).width(val_w)].padding([4, 12]),
+            widget::row![text::body("Gateway").width(label_w), text::body(if self.gateway.is_empty() { "—".to_string() } else { self.gateway.clone() }).width(val_w)].padding([4, 12]),
+            widget::row![text::body("DNS").width(label_w), text::body(self.dns_servers.first().map(|s| s.as_str()).unwrap_or("—")).width(val_w)].padding([4, 12]),
             if self.is_wireless {
-                widget::row![text::body("Signal").width(Length::Fill), text::body(if self.signal_level.is_empty() { "—".to_string() } else { format!("{} dBm", &self.signal_level) })].padding([4, 12])
+                widget::row![text::body("Signal").width(label_w), text::body(signal_str).width(val_w)].padding([4, 12])
             } else { widget::row![].into() },
             if self.is_wireless {
-                widget::row![text::body("Link Speed").width(Length::Fill), text::body(if self.link_speed.is_empty() { "—".to_string() } else { format!("{} Mbps", &self.link_speed) })].padding([4, 12])
+                widget::row![text::body("Link Speed").width(label_w), text::body(link_str).width(val_w)].padding([4, 12])
             } else { widget::row![].into() },
-            widget::row![text::body("Connected").width(Length::Fill), text::body(&self.connection_duration)].padding([4, 12]),
+            widget::row![text::body("Connected").width(label_w), text::body(&self.connection_duration).width(val_w)].padding([4, 12]),
         ]
-        .spacing(4)
+        .spacing(0)
         .padding([0, 0, 8, 0])
         .into()
     }
@@ -696,9 +708,6 @@ impl AppModel {
             .iter()
             .position(|&v| v == self.config.data_retention_days);
 
-        let autostart_toggle = widget::toggler(self.config.autostart)
-            .on_toggle(Message::SetAutostart)
-            .label(Some("Start with COSMIC".to_string()));
         let notif_toggle = widget::toggler(self.config.notifications_enabled)
             .on_toggle(Message::SetNotifications)
             .label(Some("Notifications".to_string()));
@@ -718,7 +727,6 @@ impl AppModel {
             ),
             settings::item("Interface", widget::dropdown::dropdown(self.settings_iface_opts.as_slice(), iface_idx, Message::SetNetworkInterface)),
             settings::item("Data Retention", widget::dropdown::dropdown(retention_opts, retention_idx, |idx| Message::SetDataRetentionDays(idx))),
-            settings::item("", autostart_toggle),
             settings::item("", notif_toggle),
             widget::row![
                 button::custom(text::body("Reset Today")).on_press(Message::ResetToday),
@@ -759,7 +767,7 @@ fn subtle_divider() -> Element<'static, Message> {
         widget::divider::horizontal::default(),
     )
     .width(Length::Fill)
-    .padding([4, 12])
+    .padding([8, 12])
     .into()
 }
 
@@ -797,8 +805,14 @@ fn today_graph(hourly: Vec<f64>) -> Element<'static, Message> {
     widget::column![
         canvas_widget,
         widget::row![
-            text::body("12 AM").size(10),
-            widget::Space::new().width(Length::Fill),
+            text::body("12A").size(10),
+            widget::Space::new().width(Length::FillPortion(6)),
+            text::body("6A").size(10),
+            widget::Space::new().width(Length::FillPortion(6)),
+            text::body("12P").size(10),
+            widget::Space::new().width(Length::FillPortion(6)),
+            text::body("6P").size(10),
+            widget::Space::new().width(Length::FillPortion(5)),
             text::body("Now").size(10),
         ]
         .padding([0, 12, 0, 12]),
@@ -878,9 +892,20 @@ fn monthly_content(
     widget::column![
         widget::row![text::body("This Month").width(Length::Fill), text::body(volume_str(this_rx + this_tx))].padding([4, 12]),
         widget::row![text::body(format!("↓ {}    ↑ {}", volume_str(this_rx), volume_str(this_tx)))].padding([4, 12]),
-        widget::row![text::body("Daily Usage").width(Length::Fill),].padding([4, 12]),
+        widget::row![text::body("Total Daily Usage").width(Length::Fill),].padding([4, 12]),
         Canvas::<MonthlySparkline, Message, cosmic::Theme>::new(MonthlySparkline { bars: monthly_bars }).width(Length::Fill).height(Length::Fixed(28.0)),
-        widget::row![text::body(format!("1{:>width$}31", "", width = days_in_month.saturating_sub(4).to_string().len().max(1)))].padding([0, 12]),
+        widget::row![
+            text::body("1").size(10),
+            widget::Space::new().width(Length::Fill),
+            text::body(format!("{}", 1 + days_in_month / 4)).size(10),
+            widget::Space::new().width(Length::Fill),
+            text::body(format!("{}", 1 + 2 * days_in_month / 4)).size(10),
+            widget::Space::new().width(Length::Fill),
+            text::body(format!("{}", 1 + 3 * days_in_month / 4)).size(10),
+            widget::Space::new().width(Length::Fill),
+            text::body(format!("{}", days_in_month)).size(10),
+        ]
+        .padding([0, 12]),
         widget::row![text::body("Highest Day").width(Length::Fill), text::body(if max_day > 0 { volume_str(max_day) } else { "-".to_string() })].padding([4, 12]),
         widget::row![text::body("Average / Day").width(Length::Fill), text::body(if avg > 0 { volume_str(avg) } else { "-".to_string() })].padding([4, 12]),
         widget::row![text::body("Lowest Day").width(Length::Fill), text::body(if lowest > 0 { volume_str(lowest) } else { "-".to_string() })].padding([4, 12]),
@@ -903,10 +928,9 @@ fn popup_inner_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style 
     } else {
         Color::from_rgba8(0x00, 0x00, 0x00, 0.08)
     };
+    let bg: Color = cosmic.background(false).base.into();
     cosmic::widget::container::Style {
-        background: Some(cosmic::iced::Background::Color(Color::from_rgba8(
-            0, 0, 0, 0.0,
-        ))),
+        background: Some(cosmic::iced::Background::Color(Color { a: 0.93, ..bg })),
         text_color: Some(text_col),
         border: cosmic::iced::Border {
             radius: 12.0.into(),
@@ -932,11 +956,11 @@ fn volume_str(bytes: u64) -> String {
     };
 
     if scaled >= 10.0 {
-        format!("{:.0}{}", scaled, prefix)
+        format!("{:.0} {}", scaled, prefix)
     } else if scaled >= 1.0 {
-        format!("{:.1}{}", scaled, prefix)
+        format!("{:.1} {}", scaled, prefix)
     } else {
-        format!("{:.2}{}", scaled, prefix)
+        format!("{:.2} {}", scaled, prefix)
     }
 }
 
