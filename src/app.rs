@@ -171,7 +171,7 @@ impl cosmic::Application for AppModel {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let speed = self.format_panel_speed();
-        let content = text::body(speed);
+        let content = text::monotext(speed);
 
         let btn = button::custom(content)
             .on_press_down(Message::TogglePopup)
