@@ -37,12 +37,37 @@ Then add it: **COSMIC Settings → Desktop → Panel → Add applet**.
 ## Features
 
 - **Live speeds** — Download/upload rate in the panel, updated every second
+- **Quota light** — 🟢 unlimited · 🔴 burning daily quota · ⚪ unknown
 - **Hourly sparkline** — Activity graph for the current day
 - **Monthly bar chart** — Per-day totals with highest/average/lowest; click any bar for the value
 - **Connection details** — IPv4, IPv6, gateway, DNS, interface, connection duration
 - **Wi-Fi info** — SSID, signal strength, link speed
 - **Configurable** — Refresh interval, speed units (bps/bytes), panel preset, interface, data retention (7–90 days)
 - **Reset** — Clear today's or this month's stats
+
+## Quota light (cell hotspot only)
+
+Dot in the panel. Open the applet for detail.
+
+| | Means |
+|---|---|
+| 🟢 | Unlimited data — no daily quota used |
+| 🔴 | Burning your daily quota |
+| ⚪ | Don't know yet — see below |
+
+**⚪ is normal on some phones.** Android won't tell a background app which
+band it's on, so the applet can't always tell 5G-unlimited from
+5G-burning-quota. It says ⚪ instead of guessing. It never shows 🟢 unless it
+actually read `5G SA n78`.
+
+If the phone sleeps, the applet keeps the last reading but marks it
+**stale**. Stale is not the same as live.
+
+Needs [a patched KDE Connect app](https://github.com/AceMythos/kdeconnect-android)
+on the phone. Unpatched? The light just stays ⚪.
+
+**If the light is wrong:** your carrier decides what to bill. This reads the
+radio, not your account.
 
 ## Screenshots
 
