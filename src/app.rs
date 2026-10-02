@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, NaiveDate};
 
+use crate::cellular;
+
 use cosmic::app::Core;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
@@ -18,6 +20,11 @@ use crate::config::Config;
 use crate::storage;
 
 const APP_ID: &str = "com.github.AceMythos.InternetSpeedMonitor";
+
+/// Status colours for the cellular readout.
+const GREEN: Color = Color::from_rgb8(0x5A, 0xC8, 0x6A);
+const RED: Color = Color::from_rgb8(0xE5, 0x5B, 0x5B);
+const MUTED: Color = Color::from_rgb8(0x9A, 0x9A, 0x9A);
 
 pub struct AppModel {
     core: Core,
@@ -63,6 +70,13 @@ pub struct AppModel {
 
     selected_today_bar: Option<usize>,
     selected_monthly_bar: Option<usize>,
+
+    /// Last cellular state read from the phone via KDE Connect.
+    cellular: cellular::Cellular,
+    /// When that reading was taken, used to show how stale it is.
+    cellular_at: Option<Instant>,
+    /// Previous quota verdict, so notifications fire only on a change.
+    last_quota: Option<cellular::Quota>,
 }
 
 impl Default for AppModel {
@@ -103,6 +117,9 @@ impl Default for AppModel {
             last_retention_date: None,
             selected_today_bar: None,
             selected_monthly_bar: None,
+            cellular: cellular::Cellular::default(),
+            cellular_at: None,
+            last_quota: None,
         }
     }
 }
@@ -125,6 +142,7 @@ pub enum Message {
     ResetToday,
     ResetMonthly,
     NetworkInfoLoaded(Vec<String>),
+    CellularLoaded(Option<cellular::Cellular>),
     TodayBarSelected(Option<usize>),
     MonthlyBarSelected(Option<usize>),
 }
@@ -171,9 +189,29 @@ impl cosmic::Application for AppModel {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let speed = self.format_panel_speed();
-        let content = text::monotext(speed);
+        let mut row: Vec<Element<Message>> = vec![text::monotext(speed).into()];
 
-        let btn = button::custom(content)
+        // Compact quota indicator. Green only when the phone reports 5G SA on
+        // n78, which is the one state known to be unlimited.
+        if self.cellular.live || self.cellular_at.is_some() {
+            let color = match self.cellular.quota {
+                cellular::Quota::Unlimited => GREEN,
+                cellular::Quota::Burning => RED,
+                _ => MUTED,
+            };
+            row.push(
+                widget::container(text::body("●"))
+                    .class(cosmic::theme::Container::custom(move |_| {
+                        cosmic::iced::widget::container::Style {
+                            text_color: Some(color),
+                            ..Default::default()
+                        }
+                    }))
+                    .into(),
+            );
+        }
+
+        let btn = button::custom(widget::row::with_children(row).spacing(6))
             .on_press_down(Message::TogglePopup)
             .padding([4, 8]);
 
@@ -251,7 +289,14 @@ impl cosmic::Application for AppModel {
         ));
         col.push(subtle_divider());
 
-        // 7. Connection Details
+        // 7. Cellular Uplink
+        if !self.cellular.label().is_empty() {
+            col.push(subtle_divider());
+            col.push(self.cellular_section());
+            col.push(subtle_divider());
+        }
+
+        // 8. Connection Details
         col.push(self.expander(
             "Connection Details",
             self.details_expanded,
@@ -260,7 +305,7 @@ impl cosmic::Application for AppModel {
         ));
         col.push(subtle_divider());
 
-        // 8. Settings
+        // 9. Settings
         col.push(self.expander(
             "Settings",
             self.settings_expanded,
@@ -357,6 +402,13 @@ impl cosmic::Application for AppModel {
                     return Task::none();
                 }
 
+                // Poll the phone for its cellular state alongside the interface
+                // counters. This is a D-Bus round trip, so it runs on its own
+                // task rather than blocking the tick.
+                let cellular_task = Task::perform(cellular::read(), |data| {
+                    Action::App(Message::CellularLoaded(data))
+                });
+
                 let curr = match backend::read_proc_net_dev() {
                     Ok(s) => s,
                     Err(_) => return Task::none(),
@@ -437,15 +489,17 @@ impl cosmic::Application for AppModel {
                         self.last_tick = now;
 
                         let records = self.records.clone();
-                        return Task::perform(
+                        let save = Task::perform(
                             async move { storage::save_stats(&records).await },
                             |_| Action::None,
                         );
+                        return Task::batch(vec![save, cellular_task]);
                     }
                 }
 
                 self.prev_sample = Some((curr, now));
                 self.last_tick = now;
+                return cellular_task;
             }
             Message::ConfigChanged(config) => {
                 self.config = config;
@@ -532,6 +586,31 @@ impl cosmic::Application for AppModel {
                     async move { storage::save_stats(&records).await },
                     |_| Action::None,
                 );
+            }
+            Message::CellularLoaded(data) => {
+                match data {
+                    Some(c) => {
+                        // Only notify on a real transition, so a steady state
+                        // does not repeat every refresh.
+                        let previous = self.last_quota;
+                        self.cellular = c;
+                        self.cellular_at = Some(Instant::now());
+                        if previous != Some(self.cellular.quota) {
+                            self.last_quota = Some(self.cellular.quota);
+                            return cellular::notify_on_change(
+                                previous,
+                                self.cellular.quota,
+                                &self.cellular.label(),
+                            );
+                        }
+                    }
+                    None => {
+                        // Phone offline or KDE Connect not running. Keep the
+                        // last reading so the panel does not blank, but mark it
+                        // stale so it is never presented as live.
+                        self.cellular.live = false;
+                    }
+                }
             }
             Message::NetworkInfoLoaded(data) => {
                 if data.len() >= 6 {
@@ -648,7 +727,66 @@ impl AppModel {
         }
     }
 
-    fn connection_details_content(&self) -> Element<'_, Message> {
+    /// Reports what the phone's radio is doing and whether that draws from the
+/// daily allowance. States we cannot resolve are shown as such rather than
+/// being guessed at, because a wrong "unlimited" here costs real quota.
+fn cellular_section(&self) -> Element<'_, Message> {
+    let (status, advice) = match self.cellular.quota {
+        cellular::Quota::Unlimited => (
+            "UNLIMITED DATA",
+            "No daily quota is being used right now",
+        ),
+        cellular::Quota::Burning => (
+            "USING DAILY QUOTA",
+            "Data counts against your daily allowance",
+        ),
+        cellular::Quota::UnknownBand => (
+            "BAND UNKNOWN",
+            "Cannot confirm whether this is unlimited",
+        ),
+        cellular::Quota::Disconnected => (
+            "PHONE NOT CONNECTED",
+            "Start KDE Connect on your phone to see this",
+        ),
+    };
+
+    let color = match self.cellular.quota {
+        cellular::Quota::Unlimited => GREEN,
+        cellular::Quota::Burning => RED,
+        _ => MUTED,
+    };
+
+    let mut rows = vec![
+        widget::container(text::body(status))
+            .class(cosmic::theme::Container::custom(move |_| {
+                cosmic::iced::widget::container::Style {
+                    text_color: Some(color),
+                    ..Default::default()
+                }
+            }))
+            .into(),
+        widget::text::body(advice).into(),
+        widget::text::body(format!("Link: {}", self.cellular.label())).into(),
+    ];
+
+    // Show how old the reading is, so a stale value is never mistaken for live.
+    if let Some(at) = self.cellular_at {
+        let age = Instant::now().duration_since(at).as_secs();
+        let note = if self.cellular.live {
+            format!("Updated {age}s ago")
+        } else {
+            format!("Stale — phone unreachable, last seen {age}s ago")
+        };
+        rows.push(widget::text::caption(note).into());
+    }
+
+    widget::container(widget::column::with_children(rows).spacing(4))
+        .padding(16)
+        .width(Length::Fill)
+        .into()
+}
+
+fn connection_details_content(&self) -> Element<'_, Message> {
         let conn_type = if self.is_wireless {
             "Wi-Fi"
         } else {

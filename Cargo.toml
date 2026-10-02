@@ -9,6 +9,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

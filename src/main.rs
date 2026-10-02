@@ -1,5 +1,6 @@
 mod app;
 mod backend;
+mod cellular;
 mod config;
 mod storage;
 
