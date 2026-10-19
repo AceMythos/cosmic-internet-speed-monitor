@@ -26,6 +26,10 @@ const GREEN: Color = Color::from_rgb8(0x5A, 0xC8, 0x6A);
 const RED: Color = Color::from_rgb8(0xE5, 0x5B, 0x5B);
 const MUTED: Color = Color::from_rgb8(0x9A, 0x9A, 0x9A);
 
+/// How long each half of the red quota blink lasts. 800ms is a full cycle of
+/// 1.25Hz, comfortably under the WCAG 2.3.1 three-flashes-per-second limit.
+const BLINK_PERIOD: Duration = Duration::from_millis(800);
+
 pub struct AppModel {
     core: Core,
     popup: Option<Id>,
@@ -77,6 +81,13 @@ pub struct AppModel {
     cellular_at: Option<Instant>,
     /// Previous quota verdict, so notifications fire only on a change.
     last_quota: Option<cellular::Quota>,
+
+    /// Blink phase for the red quota dot. Only ever advanced while the quota is
+    /// burning, so green and grey stay steady.
+    blink_on: bool,
+    /// When the blink last flipped, so the phase is driven by elapsed time
+    /// rather than by how often the poll tick happens to fire.
+    blink_at: Instant,
 }
 
 impl Default for AppModel {
@@ -120,6 +131,8 @@ impl Default for AppModel {
             cellular: cellular::Cellular::default(),
             cellular_at: None,
             last_quota: None,
+            blink_on: true,
+            blink_at: Instant::now(),
         }
     }
 }
@@ -196,7 +209,10 @@ impl cosmic::Application for AppModel {
         if self.cellular.live || self.cellular_at.is_some() {
             let color = match self.cellular.quota {
                 cellular::Quota::Unlimited => GREEN,
-                cellular::Quota::Burning => RED,
+                cellular::Quota::Burning if self.blink_on => RED,
+                // Fade rather than vanish: a fully hidden dot in the panel reads
+                // as a broken applet instead of "your quota is burning".
+                cellular::Quota::Burning => Color::from_rgba8(0xE5, 0x5B, 0x5B, 0.25),
                 _ => MUTED,
             };
             row.push(
@@ -395,6 +411,19 @@ impl cosmic::Application for AppModel {
             }
             Message::Tick => {
                 let now = Instant::now();
+
+                // Advance the blink before the poll-interval early return below.
+                // The tick stream fires every 200ms but bails out of the polling
+                // work unless the refresh interval has elapsed, so a flip placed
+                // after that guard would be throttled to the poll rate and the
+                // dot would look frozen at long refresh intervals.
+                if self.cellular.quota == cellular::Quota::Burning
+                    && now.duration_since(self.blink_at) >= BLINK_PERIOD
+                {
+                    self.blink_at = now;
+                    self.blink_on = !self.blink_on;
+                }
+
                 let elapsed = now.duration_since(self.last_tick);
                 let min_interval = Duration::from_millis(self.config.refresh_interval);
 

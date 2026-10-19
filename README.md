@@ -37,7 +37,7 @@ Then add it: **COSMIC Settings → Desktop → Panel → Add applet**.
 ## Features
 
 - **Live speeds** — Download/upload rate in the panel, updated every second
-- **Quota light** — 🟢 unlimited · 🔴 burning daily quota · ⚪ unknown
+- **Quota light** — 🟢 unlimited · 🔴 burning daily quota (blinks) · ⚪ unknown
 - **Hourly sparkline** — Activity graph for the current day
 - **Monthly bar chart** — Per-day totals with highest/average/lowest; click any bar for the value
 - **Connection details** — IPv4, IPv6, gateway, DNS, interface, connection duration
@@ -52,8 +52,12 @@ Dot in the panel. Open the applet for detail.
 | | Means |
 |---|---|
 | 🟢 | Unlimited data — no daily quota used |
-| 🔴 | Burning your daily quota |
+| 🔴 | Burning your daily quota — the dot blinks |
 | ⚪ | Don't know yet — see below |
+
+The blink is on the red light only. Green and grey stay steady, so a blinking
+dot always means the same thing. It pulses about once a second and dims rather
+than disappearing, so it never reads as a broken applet.
 
 **⚪ is normal on some phones.** Android won't tell a background app which
 band it's on, so the applet can't always tell 5G-unlimited from
@@ -68,6 +72,33 @@ on the phone. Unpatched? The light just stays ⚪.
 
 **If the light is wrong:** your carrier decides what to bill. This reads the
 radio, not your account.
+
+### The light can flip 🟢 ⇄ 🔴 while you're sitting on one band
+
+This is the most surprising thing about the light, and it is not a bug.
+
+Unlimited is keyed off the **`5G SA` token**, not the band number. The applet
+treats these three readings differently even though the first two name the
+*same band on the same tower*:
+
+| Phone reports | Band | Verdict |
+|---|---|---|
+| `5G SA n78` | n78 | 🟢 Unlimited |
+| `LTE n78` | n78 | 🔴 Burning |
+| `5G SA n28` | n28 | ⚪ Unknown |
+
+So when a phone oscillates between 5G standalone and an LTE fallback, the light
+flips with it — even though the band never changed. Measured on a Jio handset
+alternating roughly every 15 seconds, sometimes switching band entirely
+(`n78` → `B5`) while staying on LTE.
+
+Each flip fires a desktop notification, because the applet announces *both*
+edges: unlimited becoming available, and unlimited stopping. That is deliberate —
+losing unlimited is what starts eating your daily allowance.
+
+If the flapping gets noisy, raising the **refresh interval** samples the phone
+less often, so the applet reports fewer transitions. It won't stop the radio
+from switching; it only stops the applet narrating every switch.
 
 ## Screenshots
 
