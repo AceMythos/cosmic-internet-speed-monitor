@@ -20,6 +20,12 @@
   </a>
 </p>
 
+## Screenshots
+
+| Connection details | Monthly summary |
+|---|---|
+| ![Popdown with Connection Details expanded](screenshots/Screenshot_2026-10-21_10-18-10.png) | ![Popdown with Monthly Summary expanded](screenshots/Screenshot_2026-10-21_10-18-30.png) |
+
 ---
 
 ## Quick start
@@ -99,12 +105,6 @@ losing unlimited is what starts eating your daily allowance.
 If the flapping gets noisy, raising the **refresh interval** samples the phone
 less often, so the applet reports fewer transitions. It won't stop the radio
 from switching; it only stops the applet narrating every switch.
-
-## Screenshots
-
-| Connection details | Monthly summary |
-|---|---|
-| ![Popdown with Connection Details expanded](screenshots/Screenshot_2026-10-21_10-18-10.png) | ![Popdown with Monthly Summary expanded](screenshots/Screenshot_2026-10-21_10-18-30.png) |
 
 ## Configuration
 
