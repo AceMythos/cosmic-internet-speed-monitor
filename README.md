@@ -102,7 +102,9 @@ from switching; it only stops the applet narrating every switch.
 
 ## Screenshots
 
-![Popdown detail view](screenshots/Screenshot_2026-07-19_21-54-16.png)
+| Connection details | Monthly summary |
+|---|---|
+| ![Popdown with Connection Details expanded](screenshots/Screenshot_2026-10-21_10-18-10.png) | ![Popdown with Monthly Summary expanded](screenshots/Screenshot_2026-10-21_10-18-30.png) |
 
 ## Configuration
 
