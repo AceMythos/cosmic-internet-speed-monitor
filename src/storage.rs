@@ -30,8 +30,19 @@ struct PersistedState {
 }
 
 fn data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(format!(".local/share/{}", APP_ID))
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg).join(APP_ID);
+    }
+
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join(".local/share").join(APP_ID);
+    }
+
+    std::env::temp_dir().join(APP_ID)
 }
 
 fn data_file() -> PathBuf {
@@ -69,7 +80,10 @@ fn load_stats_sync() -> Vec<DailyRecord> {
     let bak = data_file_bak();
     match try_load_from(&bak) {
         Ok(Some(records)) => {
-            eprintln!("speed-monitor: restored {} records from backup", records.len());
+            eprintln!(
+                "speed-monitor: restored {} records from backup",
+                records.len()
+            );
             return records;
         }
         Ok(None) => {}
@@ -105,9 +119,22 @@ pub async fn save_stats(records: &[DailyRecord]) {
     .await;
 }
 
+const BACKUP_INTERVAL_SECS: u64 = 300;
+
+fn backup_due(path: &Path) -> bool {
+    match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified
+            .elapsed()
+            .map(|elapsed| elapsed.as_secs() >= BACKUP_INTERVAL_SECS)
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
 fn save_stats_sync(records: &[DailyRecord]) {
     let dir = data_dir();
-    if fs::create_dir_all(&dir).is_err() {
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("speed-monitor: cannot create data dir: {e}");
         return;
     }
 
@@ -115,10 +142,13 @@ fn save_stats_sync(records: &[DailyRecord]) {
     let tmp_path = dir.join("stats.json.tmp");
     let bak = data_file_bak();
 
-    if let Ok(Some(_)) = try_load_from(&path) {
-        let _ = fs::copy(&path, &bak);
-    } else if path.exists() && !bak.exists() {
-        let _ = fs::copy(&path, &bak);
+    // Only promote a file that parses. A corrupt current file must never
+    // overwrite the last known-good backup.
+    if backup_due(&bak)
+        && matches!(try_load_from(&path), Ok(Some(_)))
+        && let Err(e) = fs::copy(&path, &bak)
+    {
+        eprintln!("speed-monitor: cannot update backup: {e}");
     }
 
     let state = PersistedState {
@@ -126,10 +156,20 @@ fn save_stats_sync(records: &[DailyRecord]) {
         records: records.to_vec(),
     };
 
-    if let Ok(json) = serde_json::to_string_pretty(&state) {
-        if fs::write(&tmp_path, &json).is_ok() {
-            let _ = fs::rename(&tmp_path, &path);
+    let json = match serde_json::to_string_pretty(&state) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("speed-monitor: cannot serialize stats: {e}");
+            return;
         }
+    };
+
+    if let Err(e) = fs::write(&tmp_path, &json) {
+        eprintln!("speed-monitor: cannot write stats: {e}");
+        return;
+    }
+    if let Err(e) = fs::rename(&tmp_path, &path) {
+        eprintln!("speed-monitor: cannot replace stats: {e}");
     }
 }
 
@@ -228,14 +268,14 @@ pub fn update_hourly(mut records: Vec<DailyRecord>, rx_add: u64, tx_add: u64) ->
 
 pub fn apply_retention(records: Vec<DailyRecord>, days: u64) -> Vec<DailyRecord> {
     let today = Local::now().date_naive();
-    let cutoff = today - chrono::Duration::days(days as i64);
+    // "30 days" means today plus the previous 29 days. The old cutoff used
+    // `today - 30` inclusively, which kept 31 calendar days.
+    let keep_days = days.max(1) as i64;
+    let cutoff = today - chrono::Duration::days(keep_days - 1);
 
     records
         .into_iter()
-        .filter(|r| {
-            key_to_date(&r.date)
-                .is_some_and(|d| d >= cutoff)
-        })
+        .filter(|r| key_to_date(&r.date).is_some_and(|d| d >= cutoff))
         .collect()
 }
 
@@ -248,14 +288,105 @@ pub fn clear_today(mut records: Vec<DailyRecord>) -> Vec<DailyRecord> {
 pub fn clear_month(mut records: Vec<DailyRecord>) -> Vec<DailyRecord> {
     let now = Local::now();
     let target_month = (now.year(), now.month());
-    records.retain(|r| {
-        key_to_date(&r.date)
-            .is_some_and(|d| (d.year(), d.month()) != target_month)
-    });
+    records.retain(|r| key_to_date(&r.date).is_some_and(|d| (d.year(), d.month()) != target_month));
     records
 }
 
 #[allow(dead_code)]
 pub fn clear_all() -> Vec<DailyRecord> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(date: NaiveDate) -> String {
+        date.format("%Y-%m-%d").to_string()
+    }
+
+    fn record(date: NaiveDate, rx: u64, tx: u64) -> DailyRecord {
+        DailyRecord {
+            date: key(date),
+            rx_bytes: rx,
+            tx_bytes: tx,
+            hourly: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn retention_keeps_exactly_requested_days() {
+        let today = Local::now().date_naive();
+        let records: Vec<_> = (0..35)
+            .map(|days_ago| record(today - chrono::Duration::days(days_ago), 1, 1))
+            .collect();
+
+        let kept = apply_retention(records, 30);
+
+        assert_eq!(kept.len(), 30, "30 days must mean 30 records, not 31");
+        assert!(kept.iter().any(|r| r.date == key(today)));
+        assert!(
+            !kept
+                .iter()
+                .any(|r| r.date == key(today - chrono::Duration::days(30)))
+        );
+    }
+
+    #[test]
+    fn update_today_creates_then_accumulates() {
+        let today = Local::now().date_naive();
+        let records = update_today(Vec::new(), 10, 20);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].date, key(today));
+        assert_eq!((records[0].rx_bytes, records[0].tx_bytes), (10, 20));
+
+        let records = update_today(records, 5, 6);
+        assert_eq!(records.len(), 1);
+        assert_eq!((records[0].rx_bytes, records[0].tx_bytes), (15, 26));
+    }
+
+    #[test]
+    fn clear_today_leaves_history_alone() {
+        let today = Local::now().date_naive();
+        let yesterday = today - chrono::Duration::days(1);
+        let records = vec![record(today, 1, 1), record(yesterday, 2, 2)];
+
+        let records = clear_today(records);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].date, key(yesterday));
+    }
+
+    #[test]
+    fn aggregate_separates_this_and_last_month() {
+        let today = Local::now().date_naive();
+        let last_month = if today.month() == 1 {
+            NaiveDate::from_ymd_opt(today.year() - 1, 12, 15).unwrap()
+        } else {
+            NaiveDate::from_ymd_opt(today.year(), today.month() - 1, 15).unwrap()
+        };
+        let records = vec![record(today, 100, 50), record(last_month, 7, 3)];
+
+        let agg = aggregate(&records);
+
+        assert_eq!((agg.today_rx, agg.today_tx), (100, 50));
+        assert_eq!((agg.this_month_rx, agg.this_month_tx), (100, 50));
+        assert_eq!((agg.last_month_rx, agg.last_month_tx), (7, 3));
+    }
+
+    #[test]
+    fn update_hourly_adds_to_current_hour() {
+        let today = Local::now().date_naive();
+        let hour = Local::now().hour() as u8;
+        let records = vec![record(today, 0, 0)];
+
+        let records = update_hourly(records, 4, 6);
+
+        let snapshot = records[0]
+            .hourly
+            .iter()
+            .find(|s| s.hour == hour)
+            .expect("current hour snapshot");
+        assert_eq!((snapshot.rx_bytes, snapshot.tx_bytes), (4, 6));
+    }
 }

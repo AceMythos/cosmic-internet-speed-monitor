@@ -86,10 +86,10 @@ pub fn compute_speed(
         return None;
     }
 
-    let rx_speed = (curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes)) as f64 * 8.0
-        / elapsed_secs;
-    let tx_speed = (curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes)) as f64 * 8.0
-        / elapsed_secs;
+    let rx_speed =
+        (curr_stats.rx_bytes.saturating_sub(prev_stats.rx_bytes)) as f64 * 8.0 / elapsed_secs;
+    let tx_speed =
+        (curr_stats.tx_bytes.saturating_sub(prev_stats.tx_bytes)) as f64 * 8.0 / elapsed_secs;
 
     Some((rx_speed, tx_speed))
 }
@@ -99,10 +99,10 @@ pub fn filter_interfaces(stats: &HashMap<String, InterfaceStats>, preferred: &st
         return preferred.to_string();
     }
 
-    if let Some(def) = default_interface() {
-        if stats.contains_key(&def) {
-            return def;
-        }
+    if let Some(def) = default_interface()
+        && stats.contains_key(&def)
+    {
+        return def;
     }
 
     for name in ["wlan0", "wlp3s0", "eth0", "enp0s3", "enp2s0"] {
@@ -113,7 +113,6 @@ pub fn filter_interfaces(stats: &HashMap<String, InterfaceStats>, preferred: &st
 
     stats.keys().next().cloned().unwrap_or_default()
 }
-
 
 /// Parses `/proc/net/route` and returns the gateway IP in dotted-decimal format
 /// for the default route (destination `00000000`).
@@ -130,8 +129,41 @@ pub fn default_gateway() -> Option<String> {
     None
 }
 
-/// Reads `/etc/resolv.conf` and returns all configured DNS server IP addresses.
-pub fn dns_servers() -> Vec<String> {
+/// Returns the DNS servers actually used for an interface.
+///
+/// On systemd-resolved systems `/etc/resolv.conf` points at the loopback stub
+/// (`127.0.0.53`), which is not the upstream server a user expects to see.
+/// Ask resolved first, then fall back to the file for non-systemd systems.
+pub fn dns_servers(interface: &str) -> Vec<String> {
+    if let Some(servers) = dns_from_resolvectl(interface)
+        && !servers.is_empty()
+    {
+        return servers;
+    }
+
+    dns_from_resolv_conf()
+}
+
+fn dns_from_resolvectl(interface: &str) -> Option<Vec<String>> {
+    let output = std::process::Command::new("resolvectl")
+        .args(["dns", interface])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let (_, servers) = stdout.split_once(':')?;
+    Some(
+        servers
+            .split_whitespace()
+            .map(|server| server.trim_matches(['(', ')']).to_string())
+            .filter(|server| server.parse::<std::net::IpAddr>().is_ok())
+            .collect(),
+    )
+}
+
+fn dns_from_resolv_conf() -> Vec<String> {
     let content = fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
     content
         .lines()
@@ -167,19 +199,30 @@ pub fn wifi_info(interface: &str) -> Option<(String, i32, u32)> {
         if let Some(val) = trimmed.strip_prefix("SSID:") {
             ssid = Some(val.trim().to_string());
         } else if let Some(val) = trimmed.strip_prefix("signal:") {
-            if let Some(dbm_str) = val.trim().split_whitespace().next() {
-                signal = dbm_str.parse::<i32>().ok();
-            }
+            signal = val
+                .split_whitespace()
+                .next()
+                .and_then(|dbm| dbm.parse::<i32>().ok());
         } else if let Some(val) = trimmed.strip_prefix("tx bitrate:") {
-            if let Some(rate_str) = val.trim().split_whitespace().next() {
-                if let Ok(rate) = rate_str.parse::<f64>() {
-                    bitrate = Some(rate as u32);
-                }
-            }
+            bitrate = val
+                .split_whitespace()
+                .next()
+                .and_then(|rate| rate.parse::<f64>().ok())
+                .map(|rate| rate as u32);
         }
     }
 
-    Some((ssid?, signal?, bitrate?))
+    // `iw` can return a successful empty response when the interface is not
+    // associated. Keep whatever fields were readable instead of discarding the
+    // whole reading because one field is missing.
+    if ssid.is_none() && signal.is_none() && bitrate.is_none() {
+        return None;
+    }
+    Some((
+        ssid.unwrap_or_default(),
+        signal.unwrap_or(0),
+        bitrate.unwrap_or(0),
+    ))
 }
 
 /// Reads `/proc/net/if_inet6` and returns the IPv6 address for the given interface
@@ -200,7 +243,13 @@ pub fn ipv6_address(interface: &str) -> Option<String> {
                     let s = std::str::from_utf8(chunk).unwrap_or("0000");
                     s.trim_start_matches('0')
                 })
-                .map(|s| if s.is_empty() { "0".to_string() } else { s.to_string() })
+                .map(|s| {
+                    if s.is_empty() {
+                        "0".to_string()
+                    } else {
+                        s.to_string()
+                    }
+                })
                 .collect();
             return Some(groups.join(":"));
         }
@@ -231,4 +280,55 @@ pub fn wifi_signal(interface: &str) -> Option<i32> {
 pub fn is_wireless(interface: &str) -> bool {
     let path = format!("/sys/class/net/{}/wireless", interface);
     std::path::Path::new(&path).is_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn stats(rx_bytes: u64, tx_bytes: u64) -> InterfaceStats {
+        InterfaceStats { rx_bytes, tx_bytes }
+    }
+
+    #[test]
+    fn computes_bits_per_second() {
+        let prev = HashMap::from([("wlan0".to_string(), stats(1_000, 500))]);
+        let curr = HashMap::from([("wlan0".to_string(), stats(1_001_000, 250_500))]);
+
+        let (rx, tx) = compute_speed(&prev, &curr, Duration::from_secs(1), "wlan0")
+            .expect("speed should be available");
+
+        assert!((rx - 8_000_000.0).abs() < f64::EPSILON);
+        assert!((tx - 2_000_000.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn missing_interface_returns_none() {
+        let prev = HashMap::new();
+        let curr = HashMap::from([("wlan0".to_string(), stats(1, 1))]);
+
+        assert!(compute_speed(&prev, &curr, Duration::from_secs(1), "wlan0").is_none());
+    }
+
+    #[test]
+    fn counter_reset_does_not_underflow() {
+        let prev = HashMap::from([("wlan0".to_string(), stats(1_000_000, 1_000_000))]);
+        let curr = HashMap::from([("wlan0".to_string(), stats(10, 10))]);
+
+        let (rx, tx) = compute_speed(&prev, &curr, Duration::from_secs(1), "wlan0")
+            .expect("speed should be available");
+
+        assert_eq!((rx, tx), (0.0, 0.0));
+    }
+
+    #[test]
+    fn preferred_interface_wins_over_fallback() {
+        let stats_map = HashMap::from([
+            ("wlan0".to_string(), stats(1, 1)),
+            ("eth0".to_string(), stats(1, 1)),
+        ]);
+
+        assert_eq!(filter_interfaces(&stats_map, "eth0"), "eth0");
+    }
 }

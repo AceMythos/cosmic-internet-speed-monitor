@@ -2,6 +2,13 @@
 name = "internet-speed-monitor"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A COSMIC desktop applet for live internet speed and data usage"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/AceMythos/cosmic-internet-speed-monitor"
+readme = "README.md"
+keywords = ["cosmic", "applet", "network", "bandwidth"]
+categories = ["desktop", "network-programming"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

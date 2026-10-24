@@ -33,11 +33,12 @@ pub enum Rat {
 pub enum Quota {
     /// 5G SA on n78: Jio treats this as unlimited.
     Unlimited,
-    /// Anything that draws from the daily allowance: n28, plain LTE, or NSA,
-    /// which rides on an LTE anchor and is billed as 4G.
+    /// Anything we can name as drawing from the daily allowance: plain LTE or
+    /// LTE with an anchor. NSA is deliberately *not* included here because
+    /// carriers bill it differently, so it stays unknown.
     Burning,
-    /// 5G SA on a band we cannot name, so we cannot tell which side of the
-    /// line this is. Deliberately not reported as unlimited.
+    /// 5G SA on a band we cannot name, or NSA, where we cannot confirm which
+    /// side of the line it is. Deliberately not reported as unlimited.
     UnknownBand,
     /// Not connected to a phone, or the property was unreadable.
     Disconnected,
@@ -72,13 +73,11 @@ impl Cellular {
         if let Some(band) = &self.band {
             parts.push(band.clone());
         }
-        parts.push(
-            match self.rat {
-                Rat::FiveG => "5G".to_string(),
-                Rat::Lte => "LTE".to_string(),
-                Rat::Other => "no data".to_string(),
-            },
-        );
+        parts.push(match self.rat {
+            Rat::FiveG => "5G".to_string(),
+            Rat::Lte => "LTE".to_string(),
+            Rat::Other => "no data".to_string(),
+        });
         match self.standalone {
             Some(true) => parts.push("SA".to_string()),
             Some(false) => parts.push("NSA".to_string()),
@@ -112,7 +111,8 @@ pub fn parse_network_type(value: &str) -> Option<Cellular> {
     let quota = match (rat, band.as_deref()) {
         // The one state we can call unambiguously: 5G SA on n78.
         (Rat::FiveG, Some(b)) if standalone == Some(true) && b == "n78" => Quota::Unlimited,
-        // Everything else either draws from the allowance or we cannot tell.
+        // A 5G reading without a confirmed SA+n78 identity is never treated as
+        // unlimited. This includes NSA, which may be billed as 4G.
         (Rat::FiveG, None) => Quota::UnknownBand,
         (Rat::FiveG, Some(_)) => Quota::UnknownBand,
         _ => Quota::Burning,
@@ -140,14 +140,26 @@ fn is_band(token: &str) -> bool {
     })
 }
 
-/// Read `cellularNetworkType` for the single paired phone.
+/// Read `cellularNetworkType` from the first paired phone that answers.
 ///
-/// Returns `None` when KDE Connect is not running, no device is paired, or the
-/// device is offline, all of which mean "no live data" to the caller.
+/// Walking the device list instead of taking the first paired device means an
+/// offline phone cannot hide a second, reachable one.
+///
+/// Returns `None` when KDE Connect is not running, no device is paired, or no
+/// device reports a readable value, all of which mean "no live data".
 pub async fn read() -> Option<Cellular> {
     let conn = zbus::Connection::session().await.ok()?;
-    let device_id = first_device(&conn).await?;
 
+    for device_id in device_ids(&conn).await? {
+        if let Some(cellular) = read_device(&conn, &device_id).await {
+            return Some(cellular);
+        }
+    }
+
+    None
+}
+
+async fn read_device(conn: &zbus::Connection, device_id: &str) -> Option<Cellular> {
     // org.freedesktop.DBus.Properties.Get, called directly rather than through
     // the typed proxy so the interface name stays a plain string.
     let reply = conn
@@ -162,8 +174,8 @@ pub async fn read() -> Option<Cellular> {
         .ok()?;
 
     // Properties.Get replies with a VARIANT, not a bare string. In zvariant a
-// variant is Value::Value(inner), so unwrap it before reading. Deserializing
-// straight to String fails with "Signature mismatch: got `v`, expected `s`".
+    // variant is Value::Value(inner), so unwrap it before reading. Deserializing
+    // straight to String fails with "Signature mismatch: got `v`, expected `s`".
     let body = reply.body();
     let value: zbus::zvariant::Value = body.deserialize().ok()?;
     let inner = match value {
@@ -175,8 +187,8 @@ pub async fn read() -> Option<Cellular> {
     parse_network_type(&text)
 }
 
-/// First paired device reported by the KDE Connect daemon.
-async fn first_device(conn: &zbus::Connection) -> Option<String> {
+/// Paired devices reported by the KDE Connect daemon.
+async fn device_ids(conn: &zbus::Connection) -> Option<Vec<String>> {
     let reply = conn
         .call_method(
             Some(SERVICE),
@@ -188,16 +200,17 @@ async fn first_device(conn: &zbus::Connection) -> Option<String> {
         .await
         .ok()?;
 
-    let devices: Vec<String> = reply.body().deserialize().ok()?;
-    devices.into_iter().next()
+    reply.body().deserialize().ok()
 }
 
-/// Fire a desktop notification when the quota verdict changes.
+/// Fire a desktop notification when the quota verdict crosses between
+/// unlimited and burning.
 ///
 /// Both edges matter: the user wants to know when unlimited data becomes
 /// available *and* when it stops, since the latter starts burning the daily
-/// allowance. Returns a task that fails silently if no notification server is
-/// present.
+/// allowance. Unknown-band transitions are shown in the applet but not
+/// notified, because they are not actionable and flap with the radio.
+/// Returns a task that fails silently if no notification server is present.
 pub(crate) fn notify_on_change(
     from: Option<Quota>,
     to: Quota,
@@ -212,11 +225,7 @@ pub(crate) fn notify_on_change(
             "Now using daily quota",
             format!("{label} — data counts against your daily allowance"),
         ),
-        Quota::UnknownBand => (
-            "On 5G, band unknown",
-            "Cannot confirm whether this is unlimited".to_string(),
-        ),
-        Quota::Disconnected => return cosmic::Task::none(),
+        Quota::UnknownBand | Quota::Disconnected => return cosmic::Task::none(),
     };
 
     // Do not announce the very first reading: the applet has just started and
@@ -287,6 +296,17 @@ mod tests {
         let c = parse_network_type("LTE B40").expect("should parse");
         assert_eq!(c.quota, Quota::Burning);
         assert_eq!(c.standalone, None);
+    }
+
+    #[test]
+    fn nsa_is_unknown_not_burning() {
+        // NSA rides an LTE anchor but carriers bill it differently, so we must
+        // not claim either "unlimited" or "burning" from the radio alone.
+        let c = parse_network_type("5G NSA n78+B40").expect("should parse");
+        assert_eq!(c.rat, Rat::FiveG);
+        assert_eq!(c.standalone, Some(false));
+        assert_eq!(c.band.as_deref(), Some("n78+B40"));
+        assert_eq!(c.quota, Quota::UnknownBand);
     }
 
     #[test]

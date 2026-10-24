@@ -80,7 +80,7 @@ fn main() {
         };
 
         // STEP 4: Properties.Get returns a VARIANT. In zvariant a variant is
-// Value::Value(inner), so unwrap that before reading the string.
+        // Value::Value(inner), so unwrap that before reading the string.
         let body = reply.body();
         let value: zbus::zvariant::Value = match body.deserialize() {
             Ok(v) => v,

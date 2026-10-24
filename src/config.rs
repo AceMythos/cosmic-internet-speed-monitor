@@ -1,4 +1,4 @@
-use cosmic::cosmic_config::{self, cosmic_config_derive::CosmicConfigEntry, CosmicConfigEntry};
+use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry};
 
 #[derive(Debug, Clone, CosmicConfigEntry, Eq, PartialEq)]
 #[version = 2]
@@ -8,6 +8,7 @@ pub struct Config {
     pub network_interface: String,
     pub speed_units: String,
     pub data_retention_days: u64,
+    pub notifications_enabled: bool,
 }
 
 impl Default for Config {
@@ -16,8 +17,9 @@ impl Default for Config {
             refresh_interval: 1000,
             panel_preset: "compact".to_string(),
             network_interface: "auto".to_string(),
-            speed_units: "auto".to_string(),
+            speed_units: "bps".to_string(),
             data_retention_days: 30,
+            notifications_enabled: true,
         }
     }
 }
