@@ -46,8 +46,8 @@ Then add it: **COSMIC Settings → Desktop → Panel → Add applet**.
 - **Quota light** — Green circle: verified unlimited · red diamond: burning daily quota (blinks) · hollow circle: unknown, offline, or stale
 - **Panel styles** — Compact text, Standard with a rolling sparkline, Detailed with today's total
 - **Hourly sparkline** — Activity graph for the current day with a live "now" marker
-- **Monthly bar chart** — Per-day totals with highest/average/lowest; click any bar for the value
-- **Connection details** — IPv4, IPv6, gateway, DNS, interface, session duration; copy any value
+- **Monthly bar chart** — Per-day totals with highest, average, and lowest values. Click any bar to see its value
+- **Connection details** — IPv4, IPv6, gateway, DNS, interface, and session duration. Copy any value
 - **Wi-Fi info** — SSID, signal strength, link speed
 - **Configurable** — Refresh interval, speed units (bps/bytes), panel preset, interface, data retention (7–90 days)
 - **Reset** — Clear today's or this month's stats, with confirmation
@@ -86,9 +86,9 @@ radio, not your account.
 
 This is the most surprising thing about the light, and it is not a bug.
 
-Unlimited is keyed off the **`5G SA` token**, not the band number. The applet
-treats these three readings differently even though the first two name the
-*same band on the same tower*:
+The applet uses the **`5G SA` token**, not the band number, to decide the
+verdict. It treats these three readings differently even though the first two
+name the *same band on the same tower*:
 
 | Phone reports | Band | Verdict |
 |---|---|---|
@@ -97,8 +97,9 @@ treats these three readings differently even though the first two name the
 | `5G SA n28` | n28 | Hollow — unknown |
 | `5G NSA n78` | n78 | Hollow — unknown |
 
-NSA is deliberately not treated as burning: whether it draws from the daily
-allowance depends on the carrier, so the applet refuses to claim either way.
+The applet deliberately does not treat NSA as burning. Whether NSA draws from
+the daily allowance depends on the carrier, so the applet refuses to claim
+either way.
 
 So when a phone oscillates between 5G standalone and an LTE fallback, the light
 flips with it — even though the band never changed. Measured on a Jio handset
@@ -109,12 +110,13 @@ With notifications on, each unlimited ⇄ burning flip fires a desktop
 notification, because the applet announces *both* edges: unlimited becoming
 available, and unlimited stopping. That is deliberate — losing unlimited is
 what starts eating your daily allowance. Transitions into or out of unknown
-are silent, because they are not actionable and flap with the radio. Turn
-notifications off in Settings if you only want the panel light.
+are silent, because they are not actionable and flap with the radio. Disable
+notifications in Settings if you only want the panel light.
 
-If the flapping gets noisy, raising the **refresh interval** samples the phone
-less often, so the applet reports fewer transitions. It won't stop the radio
-from switching; it only stops the applet narrating every switch.
+If the flapping gets noisy, increase the **refresh interval**. The applet
+samples the phone less often and reports fewer transitions. The higher interval
+does not stop the radio from switching. It only stops the applet from narrating
+every switch.
 
 ## Configuration
 
@@ -150,9 +152,9 @@ journalctl -p 3 -xb --user _EXE=/usr/bin/internet-speed-monitor
 - Stats stay on this machine in
   `$XDG_DATA_HOME/com.github.AceMythos.InternetSpeedMonitor/stats.json`
   (usually `~/.local/share/...`).
-- The applet makes no network requests. Phone state is read locally from KDE
-  Connect over D-Bus.
-- Delete that directory to remove all history.
+- The applet makes no network requests. The applet reads phone state locally
+  from KDE Connect over D-Bus.
+- Delete that directory. This deletes all history.
 
 ## Contributing
 
