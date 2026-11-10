@@ -1,7 +1,5 @@
 # Internet Speed Monitor
 
-**Architecture scan**: https://foglamp.dev/scan/internet-speed-monitor-to4zhp
-
 # Build & Update
 
 ## Requirements
