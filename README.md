@@ -139,7 +139,7 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/com.github.AceMythos.InternetSpeedM
 - **Monthly bar chart** — Per-day totals with highest, average, and lowest values. Click any bar to see its value
 - **Connection details** — IPv4, IPv6, gateway, DNS, interface, and session duration. Copy any value
 - **Wi-Fi info** — SSID, signal strength, link speed
-- **Configurable** — Refresh interval, speed units (bps/bytes), panel preset, interface, data retention (7–90 days)
+- **Configurable** — Refresh interval, speed units (bps/bytes), panel preset, interface, data retention (7, 15, 30, 60, or 90 days)
 - **Reset** — Clear today's or this month's stats, with confirmation
 
 ## Configuration
@@ -150,7 +150,7 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/com.github.AceMythos.InternetSpeedM
 | Units | bps | Bits per second or bytes per second |
 | Panel style | Compact | Compact text, Standard adds a sparkline, Detailed adds today's total |
 | Interface | auto | Which interface to monitor |
-| Keep data | 30 days | Calendar days to keep, including today (7–90) |
+| Keep data | 30 days | Days to keep, including today: 7, 15, 30, 60, or 90 |
 | Quota notifications | On | Notify on unlimited ⇄ burning transitions |
 
 ## Quota light (cell hotspot only)
@@ -167,8 +167,8 @@ detail.
 The hero screenshot at the top shows the `○` state.
 
 The blink is on the red diamond only. Green and hollow stay steady, so a
-blinking shape always means the same thing. It pulses about once a second and
-dims rather than disappearing, so it never reads as a broken applet.
+blinking shape always means the same thing. It pulses about every 0.8 seconds
+and dims rather than disappearing, so it never reads as a broken applet.
 
 **The hollow circle is normal on some phones.** Android won't tell a background
 app which band it's on, so the applet can't always tell 5G-unlimited from
@@ -202,9 +202,10 @@ name the *same band on the same tower*:
 | `5G SA n28` | n28 | Hollow — unknown |
 | `5G NSA n78` | n78 | Hollow — unknown |
 
-The applet deliberately does not treat NSA as burning. Whether NSA draws from
-the daily allowance depends on the carrier, so the applet refuses to claim
-either way.
+The applet deliberately does not treat a **5G NSA** reading as burning.
+Whether NSA draws from the daily allowance depends on the carrier, so the
+applet refuses to claim either way. A reading that names LTE is still treated
+as burning, even when it carries an NSA token.
 
 So when a phone oscillates between 5G standalone and an LTE fallback, the light
 flips with it — even though the band never changed. Measured on a Jio handset
@@ -247,8 +248,9 @@ This shows errors only, so no output means the applet has logged no errors.
 - Stats stay on this machine in
   `$XDG_DATA_HOME/com.github.AceMythos.InternetSpeedMonitor/stats.json`
   (usually `~/.local/share/...`).
-- The applet makes no network requests. The applet reads phone state locally
-  from KDE Connect over D-Bus.
+- The applet sends no data to the network. To find your local IP address it asks
+  the kernel which local address would reach `1.1.1.1:53`; a UDP `connect`
+  sends no packets. Phone state is read locally from KDE Connect over D-Bus.
 - Delete that directory. This deletes all history.
 
 ## Contributing
