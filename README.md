@@ -153,13 +153,16 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/com.github.AceMythos.InternetSpeedM
 
 ## Quota light (cell hotspot only)
 
-Dot in the panel. Open the applet for detail.
+The applet draws one symbol next to the speeds in the panel. Open the applet for
+detail.
 
-| | Means |
-|---|---|
-| Green circle | Unlimited data — verified from a live `5G SA n78` reading |
-| Red diamond | Burning your daily quota — the diamond blinks |
-| Hollow circle | Unknown, offline, or stale — see below |
+| Panel symbol | Color | Means |
+|---|---|---|
+| `●` | Green | Unlimited data — verified from a live `5G SA n78` reading |
+| `◆` | Red | Burning your daily quota — the diamond blinks |
+| `○` | Amber | Unknown, offline, or stale — see below |
+
+The hero screenshot at the top shows the `○` state.
 
 The blink is on the red diamond only. Green and hollow stay steady, so a
 blinking shape always means the same thing. It pulses about once a second and
