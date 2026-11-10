@@ -13,7 +13,7 @@
     <img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License">
   </a>
   <a href="https://www.rust-lang.org/">
-    <img src="https://img.shields.io/badge/rust-2024-dea584.svg?logo=rust" alt="Rust 2024">
+    <img src="https://img.shields.io/badge/rust-1.85%2B-dea584.svg?logo=rust" alt="Rust 1.85+">
   </a>
   <a href="https://github.com/pop-os/libcosmic">
     <img src="https://img.shields.io/badge/built%20with-libcosmic-48c9b0.svg" alt="Built with libcosmic">
@@ -28,15 +28,103 @@
 
 ---
 
-## Quick start
+## Install
+
+Takes about five minutes. Most of it is compiling.
+
+Works on Pop!_OS 24.04 and any distro running a COSMIC session.
+
+### 1. Install the tools
+
+Debian, Ubuntu, and Pop!_OS:
 
 ```sh
-git clone https://github.com/AceMythos/cosmic-internet-speed-monitor && cd cosmic-internet-speed-monitor && cargo build --release --locked && pkexec install -m 755 target/release/internet-speed-monitor /usr/bin/ && pkexec cp internet-speed-monitor.desktop /usr/share/applications/
+sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev iw
 ```
 
-Wi-Fi SSID & link speed require `iw`: `sudo apt install iw`
+`iw` is only needed for the Wi-Fi name, signal strength, and link speed.
 
-Then add it: **COSMIC Settings → Desktop → Panel → Add applet**.
+Now install Rust 1.85 or newer. Skip this if `cargo --version` already works:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+### 2. Download the code
+
+```sh
+git clone https://github.com/AceMythos/cosmic-internet-speed-monitor
+cd cosmic-internet-speed-monitor
+```
+
+No `git`? Download the ZIP with the green **Code** button on GitHub, extract it,
+then `cd` into the extracted folder.
+
+### 3. Build and install
+
+```sh
+./install.sh
+```
+
+The script builds the release binary, copies it to `/usr/bin`, registers the
+applet, and asks whether to restart the panel. It asks for your admin password
+through `pkexec`, the same prompt you get from a graphical software store.
+
+<details>
+<summary>Prefer to do it by hand?</summary>
+
+```sh
+cargo build --release --locked
+pkexec install -m 755 "$PWD/target/release/internet-speed-monitor" /usr/bin/internet-speed-monitor
+pkexec install -m 644 "$PWD/internet-speed-monitor.desktop" /usr/share/applications/internet-speed-monitor.desktop
+```
+
+</details>
+
+### 4. Add it to the panel
+
+Open **COSMIC Settings → Desktop → Panel → Add applet** and pick
+**Internet Speed Monitor**.
+
+If it is not in the list, restart the panel:
+
+```sh
+killall cosmic-panel
+```
+
+The panel starts again on its own. If it does not, log out and back in.
+
+### If something does not work
+
+| Problem | Fix |
+|---|---|
+| "No such file or directory" when running `./install.sh` | You are not inside the project folder. Run `cd cosmic-internet-speed-monitor` first. |
+| `cargo: command not found` | Rust is not installed, or the shell needs a restart. Run `source "$HOME/.cargo/env"`. |
+| Build fails with a `pkg-config` error | Install the packages from step 1, then run `./install.sh` again. |
+| Applet is missing from **Add applet** | Restart the panel (step 4) or log out and back in. |
+| Wi-Fi name, signal, or link speed is empty | Install `iw`: `sudo apt install iw`. |
+| Speed stays at zero | Open the applet and check that **Interface** picked the right adapter. |
+| Quota light stays ⚪ | The light needs a patched KDE Connect on your phone. See [Quota light](#quota-light-cell-hotspot-only). |
+
+### Uninstall
+
+```sh
+./uninstall.sh
+```
+
+It removes the binary and the applet entry, and asks before deleting your speed
+history.
+
+<details>
+<summary>Manual uninstall, or if you deleted the folder</summary>
+
+```sh
+sudo rm -f /usr/bin/internet-speed-monitor /usr/share/applications/internet-speed-monitor.desktop
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/com.github.AceMythos.InternetSpeedMonitor"
+```
+
+</details>
 
 ---
 
@@ -51,6 +139,17 @@ Then add it: **COSMIC Settings → Desktop → Panel → Add applet**.
 - **Wi-Fi info** — SSID, signal strength, link speed
 - **Configurable** — Refresh interval, speed units (bps/bytes), panel preset, interface, data retention (7–90 days)
 - **Reset** — Clear today's or this month's stats, with confirmation
+
+## Configuration
+
+| Setting | Default | Description |
+|---|---|---|
+| Refresh | 1 s | How often to poll the network interface |
+| Units | bps | Bits per second or bytes per second |
+| Panel style | Compact | Compact text, Standard adds a sparkline, Detailed adds today's total |
+| Interface | auto | Which interface to monitor |
+| Keep data | 30 days | Calendar days to keep, including today (7–90) |
+| Quota notifications | On | Notify on unlimited ⇄ burning transitions |
 
 ## Quota light (cell hotspot only)
 
@@ -82,7 +181,8 @@ on the phone. Unpatched? The light just stays ⚪.
 **If the light is wrong:** your carrier decides what to bill. This reads the
 radio, not your account.
 
-### The light can flip 🟢 ⇄ 🔴 while you're sitting on one band
+<details>
+<summary>The light can flip 🟢 ⇄ 🔴 while you're sitting on one band</summary>
 
 This is the most surprising thing about the light, and it is not a bug.
 
@@ -118,26 +218,14 @@ samples the phone less often and reports fewer transitions. The higher interval
 does not stop the radio from switching. It only stops the applet from narrating
 every switch.
 
-## Configuration
-
-| Setting | Default | Description |
-|---|---|---|
-| Refresh | 1 s | How often to poll the network interface |
-| Units | bps | Bits per second or bytes per second |
-| Panel style | Compact | Compact text, Standard adds a sparkline, Detailed adds today's total |
-| Interface | auto | Which interface to monitor |
-| Keep data | 30 days | Calendar days to keep, including today (7–90) |
-| Quota notifications | On | Notify on unlimited ⇄ burning transitions |
+</details>
 
 ## Build from source
 
-Requires Rust 1.85+ (edition 2024) and a working COSMIC/Wayland session.
-
-Full build & install instructions: [BUILD.md](BUILD.md)
+Already covered in [Install](#install). For the full build and update workflow,
+see [BUILD.md](BUILD.md).
 
 ```sh
-git clone https://github.com/AceMythos/cosmic-internet-speed-monitor
-cd cosmic-internet-speed-monitor
 cargo build --release --locked
 ```
 
