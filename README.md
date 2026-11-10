@@ -30,16 +30,18 @@
 
 ## Install
 
-Takes about five minutes. Most of it is compiling.
+Tested on Pop!_OS 24.04 with a COSMIC session. Other distros running COSMIC
+should work, but are untested.
 
-Works on Pop!_OS 24.04 and any distro running a COSMIC session.
+The first build downloads and compiles every dependency, so give it a few
+minutes. Later builds are much faster.
 
 ### 1. Install the tools
 
 Debian, Ubuntu, and Pop!_OS:
 
 ```sh
-sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev iw
+sudo apt install build-essential pkg-config libxkbcommon-dev iw
 ```
 
 `iw` is only needed for the Wi-Fi name, signal strength, and link speed.
@@ -68,8 +70,8 @@ then `cd` into the extracted folder.
 ```
 
 The script builds the release binary, copies it to `/usr/bin`, registers the
-applet, and asks whether to restart the panel. It asks for your admin password
-through `pkexec`, the same prompt you get from a graphical software store.
+applet, and asks whether to restart the panel. `pkexec` asks for your admin
+password.
 
 <details>
 <summary>Prefer to do it by hand?</summary>
@@ -237,6 +239,8 @@ cargo build --release --locked
 ```sh
 journalctl -p 3 -xb --user _EXE=/usr/bin/internet-speed-monitor
 ```
+
+This shows errors only, so no output means the applet has logged no errors.
 
 ## Data and privacy
 
