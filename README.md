@@ -133,7 +133,7 @@ rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/com.github.AceMythos.InternetSpeedM
 ## Features
 
 - **Live speeds** — Download/upload rate in the panel, updated every second
-- **Quota light** — Green circle: verified unlimited · red diamond: burning daily quota (blinks) · hollow circle: unknown, offline, or stale
+- **Quota light** — Green circle: a live reading matches the Jio unlimited rule · red diamond: burning daily quota (blinks) · hollow circle: unknown, offline, or stale
 - **Panel styles** — Compact text, Standard with a rolling sparkline, Detailed with today's total
 - **Hourly sparkline** — Activity graph for the current day with a live "now" marker
 - **Monthly bar chart** — Per-day totals with highest, average, and lowest values. Click any bar to see its value
@@ -160,11 +160,16 @@ detail.
 
 | Panel symbol | Color | Means |
 |---|---|---|
-| `●` | Green | Unlimited data — verified from a live `5G SA n78` reading |
+| `●` | Green | Unlimited data — a live `5G SA n78` reading matches the Jio rule |
 | `◆` | Red | Burning your daily quota — the diamond blinks |
 | `○` | Amber | Unknown, offline, or stale — see below |
 
 The hero screenshot at the top shows the `○` state.
+
+**The green rule is tuned for Jio.** Jio treats 5G SA on n78 as unlimited, so
+that is the only reading that turns the dot green. On another carrier the same
+reading may not mean unlimited, and the applet cannot tell. Treat green as
+"matches the Jio rule", not as a billing fact.
 
 The blink is on the red diamond only. Green and hollow stay steady, so a
 blinking shape always means the same thing. It pulses about every 0.8 seconds
